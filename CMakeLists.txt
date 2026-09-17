@@ -91,6 +91,7 @@ option(USE_FFMPEG "Use FFmpeg for video/audio decoding" ON)
 # 图形后端编译选项
 option(USE_RENDER_GL "OpenGL 3.3+/OpenGLES 3.0+ backend" ON)
 option(USE_RENDER_VK "Vulkan backend" ON)
+option(KRKR_HOST_LIBRARY "Build KRKR as an embeddable iOS framework" OFF)
 
 # 建立项目
 if(ONLYCONSOLE)
