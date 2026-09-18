@@ -12,13 +12,14 @@ Metal presentation with software composition.
 
 - RGBA8 Layer images/targets; R8 glyph coverage. Image decoding and FreeType stay
   on CPU. Province images always use the software factory.
-- Copy, color/mask copy, opaque copy; ARGB/color/mask fills.
+- Copy, color/mask copy, opaque copy; ARGB/color/mask fills, plus opacity color fills and `_d`/`_a` variants.
 - AlphaBlend (the software default already holds destination alpha), HDA,
   destination-alpha `_d` and additive-destination `_a`; constant-alpha variants.
 - ApplyColorMap, `_d`, `_a` coverage/color/opacity; ordinary antialiased glyphs.
 - Integer rectangles: nearest, fast linear, linear. Sampling matches software
   ResizeRGBA, including integer clipping adjustments and edge extrapolation.
-  Single-pixel dimensions now safely replicate their only row/column.
+  Single-pixel dimensions now safely replicate their only row/column. Negative
+  extrapolation uses a defined ARM-compatible unsigned conversion.
 - Other samplers, affine/perspective transforms, special text and transition
   methods execute the same canonical software methods through scoped views.
   Scaled reversed source rectangles retain software fallback.
@@ -28,6 +29,10 @@ metadata follows opacity/color setters, including the full-opacity special
 branch. `_d` uses the production opacity/negative-multiply tables, initialized
 lazily after TVPGL initialization. Ordinary Layer formulas do not use Emote UV
 or blend formulas.
+
+Software reverse copy now honors half-open horizontal bounds instead of reading
+one pixel before the source. Software Gray copy uses byte strides rather than
+32-bit pixel strides. Both prevent out-of-bounds access in edge fixtures.
 
 ## Synchronization and lifetime
 
@@ -63,9 +68,10 @@ subrectangles, clipping during resize, dimensions of one, sampling, flips and
 self-copy overlap. It checks exact copy/fill bytes and blend/linear error <= 1,
 GPU-to-CPU-to-GPU interleaving, cache reuse, raw pointer writes, independent
 textures, unsupported methods/transitions/affine/perspective, three session
-unbinds, and deliberately retained textures. A 120-operation ordinary Layer
+unbinds, and deliberately retained textures. A 120-operation ordinary Layer and 320-glyph text
 workload reports software CPU wall time and GPU encoding wall time, checks GPU
-execution and zero CPU readbacks until explicit final validation.
+execution and zero CPU readbacks until explicit final validation. Native tests also verify texture-alias presentation
+and screenshots preserving visible RGB even with zero stored alpha.
 
 CI runs native Metal tests plus existing TJS shutdown, scene-cache and frame-time
 checks, builds device/simulator frameworks and the app. Device validation still
