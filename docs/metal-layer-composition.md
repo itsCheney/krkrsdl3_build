@@ -93,3 +93,8 @@ special-operator migration are out of scope.
 A separate Release performance run disables the validation layer; validation
 CPU overhead must not be used as a device performance prediction. Tiny glyph
 GPU dispatch overhead is reported independently from large Layer composition.
+
+Offset animation/video updates now clip to canvas bounds while advancing the
+source by clipped rows/columns. Empty and offscreen updates are no-ops. AlphaMovie
+resizes its backing canvas to script screen dimensions and initializes new
+canvas pixels to transparent; software updates use the same rectangle contract.
