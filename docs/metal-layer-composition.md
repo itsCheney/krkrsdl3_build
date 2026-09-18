@@ -33,13 +33,14 @@ or blend formulas.
 
 Software reverse copy now honors half-open horizontal bounds instead of reading
 one pixel before the source. Software Gray copy uses byte strides rather than
-32-bit pixel strides. Both prevent out-of-bounds access in edge fixtures.
+32-bit pixel strides. Script point/color/mask writes first sever shared texture
+ownership, and Province point writes preserve their 8-bit index. Both prevent out-of-bounds access in edge fixtures.
 
 ## Synchronization and lifetime
 
 GPU mutations invalidate CPU caches. Reads share a cache until content changes;
 CPU writes dirty it and upload before the next GPU use. Pinned raw-pointer
-textures remain CPU authoritative and preserve pointer addresses; arbitrary
+textures remain CPU authoritative and preserve pointer addresses (including loaded-image exports); arbitrary
 plugin writes are refreshed whenever they become GPU sources. Script Bitmap,
 Layer and LayerEx exports use that path. GPU sources and overlapping self-copies
 use independent snapshots. Destination-dependent kernels snapshot only the
