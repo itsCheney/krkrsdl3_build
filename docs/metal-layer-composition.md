@@ -5,7 +5,8 @@ Stable renderer remains on app `main` / build and core `mikage`.
 
 Default `metal` binds a process-lifetime hybrid RenderManager before any game
 Layer is created. `software-metal` and `opengl` retain the software manager.
-Layer shaders compile independently; failure logs a reason and retains native
+Initialization probes RGBA and R8 resources before binding and records a fallback
+reason if unavailable. Layer shaders compile independently; failure logs a reason and retains native
 Metal presentation with software composition.
 
 ## Supported paths
@@ -44,7 +45,8 @@ Layer and LayerEx exports use that path. GPU sources and overlapping self-copies
 use independent snapshots. Destination-dependent kernels snapshot only the
 written rectangle; overwrite kernels never read destination pixels. Unsupported
 CPU methods currently read complete operand textures once per content version.
-No permanent CPU mirror is created for GPU-only textures.
+The backend additionally exposes tightly packed local RGBA/R8 readback and
+validates region bounds. No permanent CPU mirror is created for GPU-only textures.
 
 Layers, character/cache resources and deferred deletions are cleared before
 manager unbinding and backend shutdown. Any intentionally retained texture is
