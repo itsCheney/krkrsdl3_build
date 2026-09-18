@@ -43,7 +43,12 @@ textures remain CPU authoritative and preserve pointer addresses; arbitrary
 plugin writes are refreshed whenever they become GPU sources. Script Bitmap,
 Layer and LayerEx exports use that path. GPU sources and overlapping self-copies
 use independent snapshots. Destination-dependent kernels snapshot only the
-written rectangle; overwrite kernels never read destination pixels. Unsupported
+written rectangle; on [Tier 2 read/write devices](https://developer.apple.com/documentation/metal/mtlreadwritetexturetier/tier2)
+they snapshot their own pixel into registers before writing and reuse a
+[serial compute encoder](https://developer.apple.com/documentation/metal/mtldispatchtype/serial).
+Transfers, source-alias snapshots, non-Layer passes, readback and submission close
+that encoder first, preserving ordered writes. Other devices retain rectangle
+snapshots; overwrite kernels never read destination pixels. Unsupported
 CPU methods currently read complete operand textures once per content version.
 The backend additionally exposes tightly packed local RGBA/R8 readback and
 validates region bounds. No permanent CPU mirror is created for GPU-only textures.
@@ -83,3 +88,7 @@ sessions, repeated exits and background/foreground recovery. Compare identical
 scenes against stable main; transfer/resident counters should settle and
 supported paths should avoid recurring readbacks. GPU image decoding and full
 special-operator migration are out of scope.
+
+A separate Release performance run disables the validation layer; validation
+CPU overhead must not be used as a device performance prediction. Tiny glyph
+GPU dispatch overhead is reported independently from large Layer composition.
