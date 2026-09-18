@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include "TVPCompositor.h"
+#include "MetalLayerRenderManager.h"
 
 namespace {
 std::atomic<MikageKRKRLogCallback> diagnosticCallback{nullptr};
@@ -482,6 +483,15 @@ extern "C" bool MikageKRKRGetStats(MikageKRKRStats *stats)
     auto* backend = krkrsdl3::TVPGetRenderBackend();
     stats->gpuSubmissionTimeMilliseconds = backend ? backend->GetGpuSubmissionTimeMilliseconds() : -1.0;
     stats->presentationWaitTimeMilliseconds = backend ? backend->GetPresentationWaitTimeMilliseconds() : -1.0;
+    auto layers = TVPGetMetalLayerRenderStats();
+    stats->gpuLayerComposition = TVPMetalLayerCompositionActive() ? 1 : 0;
+    stats->gpuLayerOperations = layers.gpuOperations;
+    stats->layerCPUFallbacks = layers.cpuFallbacks;
+    stats->layerUploadedBytes = layers.uploadedBytes;
+    stats->layerReadbackBytes = layers.readbackBytes;
+    stats->layerGPUResidentBytes = layers.gpuResidentBytes;
+    stats->layerCPUCacheBytes = layers.cpuCacheBytes;
+    stats->layerPinnedCPUTextures = layers.pinnedCPUTextures;
     if (SDL_Window *window = MikageKRKRGetSDLWindow()) {
         int width = 0, height = 0;
         SDL_GetWindowSizeInPixels(window, &width, &height);

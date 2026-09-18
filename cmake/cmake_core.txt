@@ -43,6 +43,7 @@ set(KRKRSDL_CORE_SRC
     ${KRKRSDL_CORE_PATH}/render/LayerManager.cpp
     ${KRKRSDL_CORE_PATH}/render/LayerTreeOwner.cpp
     ${KRKRSDL_CORE_PATH}/render/RenderManager.cpp
+    ${KRKRSDL_CORE_PATH}/render/MetalLayerRenderManager.cpp
     ${KRKRSDL_CORE_PATH}/render/TVPTrans.cpp
 	${KRKRSDL_CORE_PATH}/render/TVPColor.cpp
     ${KRKRSDL_CORE_PATH}/render/TVPCompositor.cpp

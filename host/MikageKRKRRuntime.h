@@ -36,6 +36,15 @@ typedef struct MikageKRKRStats {
     double gpuSubmissionTimeMilliseconds;
     // Last frame's command-capacity + drawable wait; part of main-thread time.
     double presentationWaitTimeMilliseconds;
+    // Cumulative counters for the current Layer session (not Emote meshes).
+    uint64_t gpuLayerComposition;
+    uint64_t gpuLayerOperations;
+    uint64_t layerCPUFallbacks;
+    uint64_t layerUploadedBytes;
+    uint64_t layerReadbackBytes;
+    uint64_t layerGPUResidentBytes;
+    uint64_t layerCPUCacheBytes;
+    uint64_t layerPinnedCPUTextures;
 } MikageKRKRStats;
 
 bool MikageKRKRStart(const char *gamePath,
