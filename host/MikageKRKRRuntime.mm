@@ -14,6 +14,8 @@
 #include <atomic>
 #include <mutex>
 #include <cstdio>
+#include <cstdlib>
+#include "TVPCompositor.h"
 
 namespace {
 std::atomic<MikageKRKRLogCallback> diagnosticCallback{nullptr};
@@ -495,4 +497,38 @@ extern "C" void MikageKRKRNotifyMenu(void)
 {
     if (menuCallback)
         menuCallback(callbackContext);
+}
+
+extern "C" bool MikageKRKRCaptureFrame(MikageKRKRCapturedFrame *frame)
+{
+    if (!frame || frame->pixels || !running || !foreground || ![NSThread isMainThread])
+        return false;
+    *frame = {};
+    @autoreleasepool {
+        try {
+            auto *backend = krkrsdl3::TVPGetRenderBackend();
+            std::vector<uint8_t> pixels;
+            int width = 0, height = 0, pitch = 0;
+            if (!backend || !backend->CaptureFrame(pixels, width, height, pitch))
+                return false;
+            auto *copy = static_cast<uint8_t *>(std::malloc(pixels.size()));
+            if (!copy) return false;
+            std::memcpy(copy, pixels.data(), pixels.size());
+            frame->pixels = copy;
+            frame->width = width;
+            frame->height = height;
+            frame->pitch = pitch;
+            return true;
+        } catch (const std::exception &error) {
+            SDL_Log("Native screenshot failed: %s", error.what());
+            return false;
+        }
+    }
+}
+
+extern "C" void MikageKRKRFreeCapturedFrame(MikageKRKRCapturedFrame *frame)
+{
+    if (!frame) return;
+    std::free(frame->pixels);
+    *frame = {};
 }

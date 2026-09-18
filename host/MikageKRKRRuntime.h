@@ -45,6 +45,18 @@ bool MikageKRKRIsRunning(void);
 const char *MikageKRKRLastError(void);
 void *MikageKRKRNativeWindow(void);
 
+// On-demand native GPU screenshot. Call on the main thread with a zeroed frame.
+// Top-down straight-alpha RGBA8; no CPU copy is retained between captures.
+// On success the caller owns pixels and must release it using FreeCapturedFrame.
+typedef struct MikageKRKRCapturedFrame {
+    uint8_t *pixels;
+    int32_t width;
+    int32_t height;
+    int32_t pitch;
+} MikageKRKRCapturedFrame;
+bool MikageKRKRCaptureFrame(MikageKRKRCapturedFrame *frame);
+void MikageKRKRFreeCapturedFrame(MikageKRKRCapturedFrame *frame);
+
 #ifdef __cplusplus
 }
 #endif
