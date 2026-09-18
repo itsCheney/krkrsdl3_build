@@ -28,6 +28,14 @@ typedef struct MikageKRKRStats {
     int32_t drawableWidth;
     int32_t drawableHeight;
     char renderer[32];
+    // frameTimeMilliseconds above remains the average frame interval.
+    // Main-thread step wall time (includes script/decode and any GPU waits).
+    double cpuFrameTimeMilliseconds;
+    double maxCpuFrameTimeMilliseconds;
+    // Last completed GPU submission, excluding queue wait; -1 if unavailable.
+    double gpuSubmissionTimeMilliseconds;
+    // Last frame's command-capacity + drawable wait; part of main-thread time.
+    double presentationWaitTimeMilliseconds;
 } MikageKRKRStats;
 
 bool MikageKRKRStart(const char *gamePath,

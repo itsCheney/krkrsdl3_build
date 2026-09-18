@@ -140,6 +140,8 @@ Uint64 frameIntervalTotal = 0;
 Uint64 frameCount = 0;
 double currentFPS = 0;
 double currentFrameTimeMS = 0;
+Uint64 frameWorkTotal = 0, frameWorkMax = 0;
+double currentCpuFrameTimeMS = 0, currentMaxCpuFrameTimeMS = 0;
 constexpr Uint64 nanosecondsPerSecond = 1000000000ULL;
 
 void resetStats()
@@ -150,9 +152,11 @@ void resetStats()
     frameCount = 0;
     currentFPS = 0;
     currentFrameTimeMS = 0;
+    frameWorkTotal = frameWorkMax = 0;
+    currentCpuFrameTimeMS = currentMaxCpuFrameTimeMS = 0;
 }
 
-void recordFrame(Uint64 presentedAt)
+void recordFrame(Uint64 presentedAt, Uint64 workDuration)
 {
     if (!statsWindowStarted)
         statsWindowStarted = presentedAt;
@@ -160,6 +164,8 @@ void recordFrame(Uint64 presentedAt)
         frameIntervalTotal += presentedAt - previousFrameAt;
     previousFrameAt = presentedAt;
     frameCount++;
+    frameWorkTotal += workDuration;
+    if (workDuration > frameWorkMax) frameWorkMax = workDuration;
     Uint64 elapsed = presentedAt - statsWindowStarted;
     if (elapsed >= nanosecondsPerSecond)
     {
@@ -168,6 +174,9 @@ void recordFrame(Uint64 presentedAt)
         if (frameCount > 1)
             currentFrameTimeMS =
                 static_cast<double>(frameIntervalTotal) / (frameCount - 1) / 1000000.0;
+        currentCpuFrameTimeMS = static_cast<double>(frameWorkTotal) / frameCount / 1000000.0;
+        currentMaxCpuFrameTimeMS = static_cast<double>(frameWorkMax) / 1000000.0;
+        frameWorkTotal = frameWorkMax = 0;
         statsWindowStarted = presentedAt;
         previousFrameAt = 0;
         frameIntervalTotal = 0;
@@ -354,6 +363,7 @@ extern "C" bool MikageKRKRStart(const char *gamePath,
 
     running = true;
     foreground = true;
+    resetStats(); // Exclude startup/shader compilation from the first gameplay window.
     return true;
 }
 
@@ -363,6 +373,7 @@ extern "C" MikageKRKRStepResult MikageKRKRStep(void)
         return MIKAGE_KRKR_STEP_IDLE;
 
     try {
+        const Uint64 frameStarted = SDL_GetTicksNS();
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             SDL_AppResult result = SDL_AppEvent(appState, &event);
@@ -377,8 +388,10 @@ extern "C" MikageKRKRStepResult MikageKRKRStep(void)
             return MIKAGE_KRKR_STEP_RUNNING;
 
         SDL_AppResult result = SDL_AppIterate(appState);
-        if (result == SDL_APP_CONTINUE)
-            recordFrame(SDL_GetTicksNS());
+        if (result == SDL_APP_CONTINUE) {
+            const Uint64 frameFinished = SDL_GetTicksNS();
+            recordFrame(frameFinished, frameFinished - frameStarted);
+        }
         return finishForResult(result);
     } catch (const eTJS &error) {
         std::string message(error.GetMessage().c_str());
@@ -440,6 +453,7 @@ extern "C" bool MikageKRKRSetForeground(bool value)
         if (Application)
             Application->NotifyActiveEvent(eTVPActiveEvent::onActive);
         foreground = value;
+        resetStats(); // Background time is not a gameplay frame interval.
         lastError.clear();
         MikageKRKRLogMessage("audio", 3, "foreground.resumed");
         return true;
@@ -463,6 +477,11 @@ extern "C" bool MikageKRKRGetStats(MikageKRKRStats *stats)
     std::memset(stats, 0, sizeof(*stats));
     stats->framesPerSecond = currentFPS;
     stats->frameTimeMilliseconds = currentFrameTimeMS;
+    stats->cpuFrameTimeMilliseconds = currentCpuFrameTimeMS;
+    stats->maxCpuFrameTimeMilliseconds = currentMaxCpuFrameTimeMS;
+    auto* backend = krkrsdl3::TVPGetRenderBackend();
+    stats->gpuSubmissionTimeMilliseconds = backend ? backend->GetGpuSubmissionTimeMilliseconds() : -1.0;
+    stats->presentationWaitTimeMilliseconds = backend ? backend->GetPresentationWaitTimeMilliseconds() : -1.0;
     if (SDL_Window *window = MikageKRKRGetSDLWindow()) {
         int width = 0, height = 0;
         SDL_GetWindowSizeInPixels(window, &width, &height);
