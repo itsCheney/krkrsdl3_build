@@ -98,3 +98,13 @@ Offset animation/video updates now clip to canvas bounds while advancing the
 source by clipped rows/columns. Empty and offscreen updates are no-ops. AlphaMovie
 resizes its backing canvas to script screen dimensions and initializes new
 canvas pixels to transparent; software updates use the same rectangle contract.
+
+The overlay Exit button now requests the KRKR main-window user-close query.
+The game owns its native confirmation/cancellation; the host continues stepping
+and does not suspend foreground audio until the game actually exits. The forced
+host stop remains available for interrupted startup/lifecycle cleanup.
+
+Shutdown stops the image loader and runs compact/KAG save callbacks before
+system at-exit and plugin unregistration. Save callbacks may execute scripts
+inside plugin archives. An unsupported archive now raises a script exception
+instead of entering the cache as a null archive pointer.

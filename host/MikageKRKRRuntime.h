@@ -55,6 +55,10 @@ bool MikageKRKRStart(const char *gamePath,
                      MikageKRKRCompletionCallback completionCallback,
                      void *context);
 MikageKRKRStepResult MikageKRKRStep(void);
+// Request KRKR's normal main-window close query; game may confirm or cancel.
+// No forced termination and no foreground suspension while it is pending.
+bool MikageKRKRRequestExit(void);
+// Forced host stop for interrupted startup/host lifecycle cleanup.
 void MikageKRKRRequestStop(void);
 bool MikageKRKRSetForeground(bool foreground);
 bool MikageKRKRGetStats(MikageKRKRStats *stats);

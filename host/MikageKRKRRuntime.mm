@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include "TVPCompositor.h"
+#include "WindowManager.h"
 #include "MetalLayerRenderManager.h"
 
 namespace {
@@ -403,6 +404,25 @@ extern "C" MikageKRKRStepResult MikageKRKRStep(void)
         finish(SDL_APP_FAILURE, "Unknown C++ exception while stepping KRKR.");
     }
     return MIKAGE_KRKR_STEP_FAILED;
+}
+
+extern "C" bool MikageKRKRRequestExit(void)
+{
+    if (!running || !foreground || !TVPMainWindow)
+        return false;
+    try {
+        MikageKRKRLogMessage("bridge", 3, "runtime.userClose.requested");
+        TVPMainWindow->RequestUserClose();
+        return true;
+    } catch (const eTJS &error) {
+        lastError = error.GetMessage().c_str();
+    } catch (const std::exception &error) {
+        lastError = error.what() ? error.what() : "KRKR close-query failed.";
+    } catch (...) {
+        lastError = "Unknown exception requesting KRKR close-query.";
+    }
+    MikageKRKRLogMessage("bridge", 5, lastError.c_str());
+    return false;
 }
 
 extern "C" void MikageKRKRRequestStop(void)
