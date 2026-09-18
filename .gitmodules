@@ -1,3 +1,4 @@
 [submodule "cpp"]
 	path = cpp
 	url = https://github.com/itsCheney/krkrsdl3.git
+	branch = beta

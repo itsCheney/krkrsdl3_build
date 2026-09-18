@@ -1,6 +1,6 @@
 # Experimental ordinary Layer composition on Metal
 
-Branch: `codex/metal-layer-composition` in the app, build and core repositories.
+Branch: `beta` in the app, build and core repositories.
 Stable renderer remains on app `main` / build and core `mikage`.
 
 Default `metal` binds a process-lifetime hybrid RenderManager before any game
