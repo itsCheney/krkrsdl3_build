@@ -1,6 +1,6 @@
 # Experimental ordinary Layer composition on Metal
 
-Branch: `beta` in the app, build and core repositories.
+Branches: app `beta`; build and SDL core `mikage-beta`.
 Stable renderer remains on app `main` / build and core `mikage`.
 
 Default `metal` binds a process-lifetime hybrid RenderManager before any game
