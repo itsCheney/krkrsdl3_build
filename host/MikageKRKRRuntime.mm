@@ -48,6 +48,9 @@ void diagnosticSDLOutput(void *, int category, SDL_LogPriority priority, const c
 }
 }
 
+// Defined in the core with C++ linkage.
+void TVPSetSkippedMovies(const char *names);
+
 extern "C" void MikageKRKRLogMessage(const char *source, int32_t level, const char *message)
 {
     if (auto callback = diagnosticCallback.load(std::memory_order_acquire))
@@ -134,7 +137,6 @@ extern "C" SDL_AppResult SDL_AppIterate(void *appstate);
 extern "C" void SDL_AppQuit(void *appstate, SDL_AppResult result);
 extern tTVPApplication *Application;
 extern "C" void TVPSetGameRunningOrientation(bool running);
-void TVPSetSkippedMovies(const char *names);
 extern "C" void MikageKRKRSetWindowScene(void *scene);
 extern "C" void MikageKRKRSetMenuGestureEnabled(bool enabled);
 extern "C" SDL_Window *MikageKRKRGetSDLWindow(void);
