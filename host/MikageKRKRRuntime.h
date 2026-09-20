@@ -22,6 +22,14 @@ typedef void (*MikageKRKRLogCallback)(const char *source, int32_t level, const c
 // May be called on runtime worker threads. NULL disables host log collection.
 void MikageKRKRSetLogCallback(MikageKRKRLogCallback callback);
 
+// Movie file names to skip, separated by newlines; NULL or empty clears the
+// list. Matching uses the base name only and ignores case, so directories and
+// a `?` parameter suffix may be included. A skipped movie reports normal
+// end-of-playback immediately, which lets a waiting script continue.
+// The string is copied. Call before MikageKRKRStart; it does not affect a
+// movie that is already playing.
+void MikageKRKRSetSkippedMovies(const char *newlineSeparatedNames);
+
 typedef struct MikageKRKRStats {
     double framesPerSecond;
     double frameTimeMilliseconds;

@@ -22,6 +22,8 @@
 namespace {
 std::atomic<MikageKRKRLogCallback> diagnosticCallback{nullptr};
 std::mutex logOutputMutex;
+std::mutex skippedMoviesMutex;
+std::string skippedMovies;
 thread_local bool mirroringKRKRLog = false;
 SDL_LogOutputFunction previousLogOutput = nullptr;
 void *previousLogContext = nullptr;
@@ -50,6 +52,17 @@ extern "C" void MikageKRKRLogMessage(const char *source, int32_t level, const ch
 {
     if (auto callback = diagnosticCallback.load(std::memory_order_acquire))
         callback(source, level, message ? message : "");
+}
+
+extern "C" void MikageKRKRSetSkippedMovies(const char *newlineSeparatedNames)
+{
+    {
+        std::lock_guard<std::mutex> lock(skippedMoviesMutex);
+        skippedMovies = newlineSeparatedNames ? newlineSeparatedNames : "";
+    }
+    // Applied immediately when a session is already running, and re-applied by
+    // MikageKRKRStart so a configuration set before launch is not lost.
+    TVPSetSkippedMovies(newlineSeparatedNames);
 }
 
 extern "C" void MikageKRKRSetLogCallback(MikageKRKRLogCallback callback)
@@ -121,6 +134,7 @@ extern "C" SDL_AppResult SDL_AppIterate(void *appstate);
 extern "C" void SDL_AppQuit(void *appstate, SDL_AppResult result);
 extern tTVPApplication *Application;
 extern "C" void TVPSetGameRunningOrientation(bool running);
+void TVPSetSkippedMovies(const char *names);
 extern "C" void MikageKRKRSetWindowScene(void *scene);
 extern "C" void MikageKRKRSetMenuGestureEnabled(bool enabled);
 extern "C" SDL_Window *MikageKRKRGetSDLWindow(void);
@@ -306,6 +320,11 @@ extern "C" bool MikageKRKRStart(const char *gamePath,
             MikageKRKRSetWindowScene(uiWindowScene);
             MikageKRKRSetMenuGestureEnabled(menuGestureEnabled);
             TVPSetGameRunningOrientation(true);
+            // Re-applied per session: core state is reset between games.
+            {
+                std::lock_guard<std::mutex> lock(skippedMoviesMutex);
+                TVPSetSkippedMovies(skippedMovies.empty() ? nullptr : skippedMovies.c_str());
+            }
 
             std::vector<std::string> arguments;
             arguments.emplace_back("MikageNext");

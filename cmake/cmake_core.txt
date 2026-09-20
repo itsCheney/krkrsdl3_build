@@ -70,6 +70,7 @@ set(KRKRSDL_CORE_SRC
     ${KRKRSDL_CORE_PATH}/script/tjsNativeSystem.cpp
     ${KRKRSDL_CORE_PATH}/script/tjsNativeTimer.cpp
     ${KRKRSDL_CORE_PATH}/script/tjsNativeVideoOverlay.cpp
+    ${KRKRSDL_CORE_PATH}/script/TVPSkippedMovies.cpp
     ${KRKRSDL_CORE_PATH}/script/tjsNativeWaveSoundBuffer.cpp
     ${KRKRSDL_CORE_PATH}/script/tjsNativeWindow.cpp
     ${KRKRSDL_CORE_PATH}/script/TVPScript.cpp
