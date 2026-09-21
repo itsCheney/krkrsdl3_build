@@ -59,6 +59,7 @@ bool MikageKRKRStart(const char *gamePath,
                      const char *renderer,
                      void *uiWindowScene,
                      bool menuGestureEnabled,
+                     bool respectSilentMode,
                      MikageKRKRMenuCallback menuCallback,
                      MikageKRKRCompletionCallback completionCallback,
                      void *context);
