@@ -53,6 +53,18 @@ typedef struct MikageKRKRStats {
     uint64_t layerGPUResidentBytes;
     uint64_t layerCPUCacheBytes;
     uint64_t layerPinnedCPUTextures;
+    // GPU->CPU readback attribution. Each pair reports cumulative bytes and
+    // events for one source; the byte buckets sum to layerReadbackBytes.
+    uint64_t layerReadbackLockBytes;
+    uint64_t layerReadbackLockCount;
+    uint64_t layerReadbackFallbackBytes;
+    uint64_t layerReadbackFallbackCount;
+    uint64_t layerReadbackPersistentBytes;
+    uint64_t layerReadbackPersistentCount;
+    uint64_t layerReadbackPixelsBytes;
+    uint64_t layerReadbackPixelsCount;
+    uint64_t layerReadbackDetachBytes;
+    uint64_t layerReadbackDetachCount;
 } MikageKRKRStats;
 
 bool MikageKRKRStart(const char *gamePath,
