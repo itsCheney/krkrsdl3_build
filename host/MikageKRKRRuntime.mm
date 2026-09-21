@@ -547,6 +547,29 @@ extern "C" bool MikageKRKRGetStats(MikageKRKRStats *stats)
     stats->layerGPUResidentBytes = layers.gpuResidentBytes;
     stats->layerCPUCacheBytes = layers.cpuCacheBytes;
     stats->layerPinnedCPUTextures = layers.pinnedCPUTextures;
+    const auto readbackIndex = [](TVPLayerReadbackSource source) {
+        return static_cast<int>(source);
+    };
+    stats->layerReadbackLockBytes =
+        layers.readbackBytesBySource[readbackIndex(TVPLayerReadbackSource::Lock)];
+    stats->layerReadbackLockCount =
+        layers.readbackCountBySource[readbackIndex(TVPLayerReadbackSource::Lock)];
+    stats->layerReadbackFallbackBytes =
+        layers.readbackBytesBySource[readbackIndex(TVPLayerReadbackSource::Fallback)];
+    stats->layerReadbackFallbackCount =
+        layers.readbackCountBySource[readbackIndex(TVPLayerReadbackSource::Fallback)];
+    stats->layerReadbackPersistentBytes =
+        layers.readbackBytesBySource[readbackIndex(TVPLayerReadbackSource::Persistent)];
+    stats->layerReadbackPersistentCount =
+        layers.readbackCountBySource[readbackIndex(TVPLayerReadbackSource::Persistent)];
+    stats->layerReadbackPixelsBytes =
+        layers.readbackBytesBySource[readbackIndex(TVPLayerReadbackSource::Pixels)];
+    stats->layerReadbackPixelsCount =
+        layers.readbackCountBySource[readbackIndex(TVPLayerReadbackSource::Pixels)];
+    stats->layerReadbackDetachBytes =
+        layers.readbackBytesBySource[readbackIndex(TVPLayerReadbackSource::Detach)];
+    stats->layerReadbackDetachCount =
+        layers.readbackCountBySource[readbackIndex(TVPLayerReadbackSource::Detach)];
     if (SDL_Window *window = MikageKRKRGetSDLWindow()) {
         int width = 0, height = 0;
         SDL_GetWindowSizeInPixels(window, &width, &height);
