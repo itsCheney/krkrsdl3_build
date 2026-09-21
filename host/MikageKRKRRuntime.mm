@@ -318,6 +318,16 @@ extern "C" bool MikageKRKRStart(const char *gamePath,
 
         try {
             MikageKRKRSetLogCallback(diagnosticCallback.load(std::memory_order_acquire));
+            // SDL defaults to AVAudioSessionCategoryPlayback on iOS, which
+            // intentionally ignores the Ring/Silent switch. Mikage is a game
+            // host, so follow normal iOS game audio behavior: ambient audio is
+            // silenced by the hardware/software mute state and may mix with
+            // audio from other apps.
+            SDL_SetHintWithPriority(
+                SDL_HINT_AUDIO_CATEGORY,
+                "ambient",
+                SDL_HINT_OVERRIDE
+            );
             SDL_SetMainReady();
             MikageKRKRSetWindowScene(uiWindowScene);
             MikageKRKRSetMenuGestureEnabled(menuGestureEnabled);
