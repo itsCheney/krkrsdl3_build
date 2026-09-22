@@ -573,6 +573,10 @@ extern "C" bool MikageKRKRGetStats(MikageKRKRStats *stats)
         layers.readbackBytesBySource[readbackIndex(TVPLayerReadbackSource::Detach)];
     stats->layerReadbackDetachCount =
         layers.readbackCountBySource[readbackIndex(TVPLayerReadbackSource::Detach)];
+    stats->layerReadbackPointBytes =
+        layers.readbackBytesBySource[readbackIndex(TVPLayerReadbackSource::Point)];
+    stats->layerReadbackPointCount =
+        layers.readbackCountBySource[readbackIndex(TVPLayerReadbackSource::Point)];
 
     const auto fallbackRoleIndex = [](TVPLayerFallbackReadbackRole role) {
         return static_cast<int>(role);

@@ -65,6 +65,8 @@ typedef struct MikageKRKRStats {
     uint64_t layerReadbackPixelsCount;
     uint64_t layerReadbackDetachBytes;
     uint64_t layerReadbackDetachCount;
+    uint64_t layerReadbackPointBytes;
+    uint64_t layerReadbackPointCount;
 
     // Software fallback attribution. Role counters only advance when that
     // operand caused a real GPU->CPU readback.
