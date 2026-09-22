@@ -570,6 +570,55 @@ extern "C" bool MikageKRKRGetStats(MikageKRKRStats *stats)
         layers.readbackBytesBySource[readbackIndex(TVPLayerReadbackSource::Detach)];
     stats->layerReadbackDetachCount =
         layers.readbackCountBySource[readbackIndex(TVPLayerReadbackSource::Detach)];
+
+    const auto fallbackRoleIndex = [](TVPLayerFallbackReadbackRole role) {
+        return static_cast<int>(role);
+    };
+    stats->layerFallbackTargetReadbackBytes =
+        layers.fallbackReadbackBytesByRole[fallbackRoleIndex(TVPLayerFallbackReadbackRole::Target)];
+    stats->layerFallbackTargetReadbackCount =
+        layers.fallbackReadbackCountByRole[fallbackRoleIndex(TVPLayerFallbackReadbackRole::Target)];
+    stats->layerFallbackSourceReadbackBytes =
+        layers.fallbackReadbackBytesByRole[fallbackRoleIndex(TVPLayerFallbackReadbackRole::Source)];
+    stats->layerFallbackSourceReadbackCount =
+        layers.fallbackReadbackCountByRole[fallbackRoleIndex(TVPLayerFallbackReadbackRole::Source)];
+    stats->layerFallbackReferenceReadbackBytes =
+        layers.fallbackReadbackBytesByRole[fallbackRoleIndex(TVPLayerFallbackReadbackRole::Reference)];
+    stats->layerFallbackReferenceReadbackCount =
+        layers.fallbackReadbackCountByRole[fallbackRoleIndex(TVPLayerFallbackReadbackRole::Reference)];
+
+    const auto rejectIndex = [](TVPLayerGPURejectReason reason) {
+        return static_cast<int>(reason);
+    };
+    stats->layerGPURejectTargetUnavailable =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::TargetUnavailable)];
+    stats->layerGPURejectTargetCPUResident =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::TargetCPUResident)];
+    stats->layerGPURejectMultipleInputs =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::MultipleInputs)];
+    stats->layerGPURejectUnsupportedMethod =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::UnsupportedMethod)];
+    stats->layerGPURejectUnsupportedStretch =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::UnsupportedStretch)];
+    stats->layerGPURejectInvalidOpacity =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::InvalidOpacity)];
+    stats->layerGPURejectSourceUnavailable =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::SourceUnavailable)];
+    stats->layerGPURejectSourceFormat =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::SourceFormat)];
+    stats->layerGPURejectInvalidGeometry =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::InvalidGeometry)];
+    stats->layerGPURejectUnsupportedKind =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::UnsupportedKind)];
+    stats->layerGPURejectAlphaTables =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::AlphaTables)];
+    stats->layerGPURejectBackendFailure =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::BackendFailure)];
+    stats->layerGPURejectTriangles =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::Triangles)];
+    stats->layerGPURejectPerspective =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::Perspective)];
+
     if (SDL_Window *window = MikageKRKRGetSDLWindow()) {
         int width = 0, height = 0;
         SDL_GetWindowSizeInPixels(window, &width, &height);

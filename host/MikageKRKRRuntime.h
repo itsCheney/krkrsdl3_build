@@ -65,6 +65,31 @@ typedef struct MikageKRKRStats {
     uint64_t layerReadbackPixelsCount;
     uint64_t layerReadbackDetachBytes;
     uint64_t layerReadbackDetachCount;
+
+    // Software fallback attribution. Role counters only advance when that
+    // operand caused a real GPU->CPU readback.
+    uint64_t layerFallbackTargetReadbackBytes;
+    uint64_t layerFallbackTargetReadbackCount;
+    uint64_t layerFallbackSourceReadbackBytes;
+    uint64_t layerFallbackSourceReadbackCount;
+    uint64_t layerFallbackReferenceReadbackBytes;
+    uint64_t layerFallbackReferenceReadbackCount;
+
+    // Why Layer operations rejected the Metal path before using software.
+    uint64_t layerGPURejectTargetUnavailable;
+    uint64_t layerGPURejectTargetCPUResident;
+    uint64_t layerGPURejectMultipleInputs;
+    uint64_t layerGPURejectUnsupportedMethod;
+    uint64_t layerGPURejectUnsupportedStretch;
+    uint64_t layerGPURejectInvalidOpacity;
+    uint64_t layerGPURejectSourceUnavailable;
+    uint64_t layerGPURejectSourceFormat;
+    uint64_t layerGPURejectInvalidGeometry;
+    uint64_t layerGPURejectUnsupportedKind;
+    uint64_t layerGPURejectAlphaTables;
+    uint64_t layerGPURejectBackendFailure;
+    uint64_t layerGPURejectTriangles;
+    uint64_t layerGPURejectPerspective;
 } MikageKRKRStats;
 
 bool MikageKRKRStart(const char *gamePath,
