@@ -117,6 +117,23 @@ typedef struct MikageKRKRStats {
     uint64_t emoteDrawTimeNS;
     uint64_t emoteCaptureProfileCalls;
     uint64_t emoteCaptureTimeNS;
+
+    // M6.2 Emote prepare breakdown.
+    uint64_t emotePrepareTransformTimeNS;
+    uint64_t emotePrepareMotionProgressTimeNS;
+    uint64_t emotePrepareSnapshotTimeNS;
+    uint64_t emoteNodeProgressCalls;
+    uint64_t emoteNodeProgressTimeNS;
+    uint64_t emoteSubmotionCreates;
+    uint64_t emoteSubmotionRebuildTimeNS;
+    uint64_t emoteShapeBuildCalls;
+    uint64_t emoteShapeBuildTimeNS;
+    uint64_t emoteShapeVertices;
+    uint64_t emoteMeshBuildCalls;
+    uint64_t emoteMeshBuildTimeNS;
+    uint64_t emoteMeshVerticesBuilt;
+    uint64_t emoteDeformedVerticesBuilt;
+
     uint64_t meshDrawCalls;
     uint64_t meshVertices;
     uint64_t meshIndices;
