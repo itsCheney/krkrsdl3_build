@@ -135,6 +135,14 @@ typedef struct MikageKRKRStats {
     uint64_t emoteDeformedVerticesBuilt;
     uint64_t emoteGPUDeformDraws;
     uint64_t emoteGPUDeformVertices;
+    uint64_t emoteRenderSteps;
+    uint64_t emotePlayerDraws;
+    uint64_t emoteDistinctPlayerDraws;
+    uint64_t emoteRepeatedPlayerDraws;
+    uint64_t emoteDistinctTargets;
+    uint64_t emoteMaxDrawsPerStep;
+    uint64_t emoteMaxPlayersPerStep;
+    uint64_t emoteMaxDrawsPerPlayerStep;
 
     uint64_t meshDrawCalls;
     uint64_t meshVertices;
@@ -148,6 +156,14 @@ typedef struct MikageKRKRStats {
     uint64_t metalSyncWaits;
     uint64_t metalSyncWaitTimeNS;
     uint64_t metalQueueWaitTimeNS;
+    uint64_t metalRingBytes;
+    uint64_t metalRingSuballocs;
+    uint64_t metalRingSuballocTimeNS;
+    uint64_t metalRingWraps;
+    uint64_t metalRingStallTimeNS;
+    uint64_t metalRingHighWaterBytes;
+    uint64_t metalRingFallbackAllocations;
+    uint64_t metalRingFallbackBytes;
     uint64_t stepEventTimeNS;
     uint64_t stepIterateTimeNS;
 } MikageKRKRStats;

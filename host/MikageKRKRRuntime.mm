@@ -433,7 +433,9 @@ extern "C" MikageKRKRStepResult MikageKRKRStep(void)
             return MIKAGE_KRKR_STEP_RUNNING;
 
         const Uint64 iterateStarted = SDL_GetTicksNS();
+        krkrsdl3::TVPBeginRuntimeStep();
         SDL_AppResult result = SDL_AppIterate(appState);
+        krkrsdl3::TVPEndRuntimeStep();
         stepIterateTimeNS += SDL_GetTicksNS() - iterateStarted;
         if (result == SDL_APP_CONTINUE) {
             const Uint64 frameFinished = SDL_GetTicksNS();
@@ -674,6 +676,14 @@ extern "C" bool MikageKRKRGetStats(MikageKRKRStats *stats)
     stats->emoteDeformedVerticesBuilt = profile.emoteDeformedVerticesBuilt;
     stats->emoteGPUDeformDraws = profile.emoteGPUDeformDraws;
     stats->emoteGPUDeformVertices = profile.emoteGPUDeformVertices;
+    stats->emoteRenderSteps = profile.emoteRenderSteps;
+    stats->emotePlayerDraws = profile.emotePlayerDraws;
+    stats->emoteDistinctPlayerDraws = profile.emoteDistinctPlayerDraws;
+    stats->emoteRepeatedPlayerDraws = profile.emoteRepeatedPlayerDraws;
+    stats->emoteDistinctTargets = profile.emoteDistinctTargets;
+    stats->emoteMaxDrawsPerStep = profile.emoteMaxDrawsPerStep;
+    stats->emoteMaxPlayersPerStep = profile.emoteMaxPlayersPerStep;
+    stats->emoteMaxDrawsPerPlayerStep = profile.emoteMaxDrawsPerPlayerStep;
     stats->meshDrawCalls = profile.meshDrawCalls;
     stats->meshVertices = profile.meshVertices;
     stats->meshIndices = profile.meshIndices;
@@ -686,6 +696,14 @@ extern "C" bool MikageKRKRGetStats(MikageKRKRStats *stats)
     stats->metalSyncWaits = profile.metalSyncWaits;
     stats->metalSyncWaitTimeNS = profile.metalSyncWaitTimeNS;
     stats->metalQueueWaitTimeNS = profile.metalQueueWaitTimeNS;
+    stats->metalRingBytes = profile.metalRingBytes;
+    stats->metalRingSuballocs = profile.metalRingSuballocs;
+    stats->metalRingSuballocTimeNS = profile.metalRingSuballocTimeNS;
+    stats->metalRingWraps = profile.metalRingWraps;
+    stats->metalRingStallTimeNS = profile.metalRingStallTimeNS;
+    stats->metalRingHighWaterBytes = profile.metalRingHighWaterBytes;
+    stats->metalRingFallbackAllocations = profile.metalRingFallbackAllocations;
+    stats->metalRingFallbackBytes = profile.metalRingFallbackBytes;
     stats->stepEventTimeNS = stepEventTimeNS;
     stats->stepIterateTimeNS = stepIterateTimeNS;
 
