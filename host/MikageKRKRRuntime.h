@@ -106,6 +106,31 @@ typedef struct MikageKRKRStats {
     uint64_t emoteCaptureCPUBytes;
     uint64_t emoteCaptureGPUCopies;
     uint64_t emoteCaptureGPUBytes;
+
+    // M5 cumulative runtime profiling. Times are nanoseconds for lossless
+    // interval differencing in the host heartbeat.
+    uint64_t emoteProgressCalls;
+    uint64_t emoteProgressTimeNS;
+    uint64_t emotePrepareCalls;
+    uint64_t emotePrepareTimeNS;
+    uint64_t emoteDrawCalls;
+    uint64_t emoteDrawTimeNS;
+    uint64_t emoteCaptureProfileCalls;
+    uint64_t emoteCaptureTimeNS;
+    uint64_t meshDrawCalls;
+    uint64_t meshVertices;
+    uint64_t meshIndices;
+    uint64_t meshCPUTimeNS;
+    uint64_t meshValidationTimeNS;
+    uint64_t meshBufferAllocations;
+    uint64_t meshBufferBytes;
+    uint64_t meshBufferAllocationTimeNS;
+    uint64_t metalSubmits;
+    uint64_t metalSyncWaits;
+    uint64_t metalSyncWaitTimeNS;
+    uint64_t metalQueueWaitTimeNS;
+    uint64_t stepEventTimeNS;
+    uint64_t stepIterateTimeNS;
 } MikageKRKRStats;
 
 bool MikageKRKRStart(const char *gamePath,

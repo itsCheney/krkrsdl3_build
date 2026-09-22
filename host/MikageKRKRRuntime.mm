@@ -160,6 +160,7 @@ double currentFPS = 0;
 double currentFrameTimeMS = 0;
 Uint64 frameWorkTotal = 0, frameWorkMax = 0;
 double currentCpuFrameTimeMS = 0, currentMaxCpuFrameTimeMS = 0;
+Uint64 stepEventTimeNS = 0, stepIterateTimeNS = 0;
 constexpr Uint64 nanosecondsPerSecond = 1000000000ULL;
 
 void resetStats()
@@ -172,6 +173,7 @@ void resetStats()
     currentFrameTimeMS = 0;
     frameWorkTotal = frameWorkMax = 0;
     currentCpuFrameTimeMS = currentMaxCpuFrameTimeMS = 0;
+    stepEventTimeNS = stepIterateTimeNS = 0;
 }
 
 void recordFrame(Uint64 presentedAt, Uint64 workDuration)
@@ -365,6 +367,7 @@ extern "C" bool MikageKRKRStart(const char *gamePath,
             // Capture diagnostics are session-scoped, just like Layer stats.
             // Do not let a previous game make GPU-copy/fallback counts ambiguous.
             krkrsdl3::TVPResetEmoteCaptureStats();
+            krkrsdl3::TVPResetRuntimeProfileStats();
             appState = nullptr;
 
             SDL_AppResult result = SDL_AppInit(
@@ -414,12 +417,14 @@ extern "C" MikageKRKRStepResult MikageKRKRStep(void)
 
     try {
         const Uint64 frameStarted = SDL_GetTicksNS();
+        const Uint64 eventsStarted = frameStarted;
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             SDL_AppResult result = SDL_AppEvent(appState, &event);
             if (result != SDL_APP_CONTINUE)
                 return finishForResult(result);
         }
+        stepEventTimeNS += SDL_GetTicksNS() - eventsStarted;
 
         if (stopRequested)
             return finishForResult(SDL_APP_SUCCESS);
@@ -427,7 +432,9 @@ extern "C" MikageKRKRStepResult MikageKRKRStep(void)
         if (!foreground)
             return MIKAGE_KRKR_STEP_RUNNING;
 
+        const Uint64 iterateStarted = SDL_GetTicksNS();
         SDL_AppResult result = SDL_AppIterate(appState);
+        stepIterateTimeNS += SDL_GetTicksNS() - iterateStarted;
         if (result == SDL_APP_CONTINUE) {
             const Uint64 frameFinished = SDL_GetTicksNS();
             recordFrame(frameFinished, frameFinished - frameStarted);
@@ -641,6 +648,30 @@ extern "C" bool MikageKRKRGetStats(MikageKRKRStats *stats)
     stats->emoteCaptureCPUBytes = emoteCapture.cpuBytes;
     stats->emoteCaptureGPUCopies = emoteCapture.gpuCopies;
     stats->emoteCaptureGPUBytes = emoteCapture.gpuBytes;
+
+    const auto profile = krkrsdl3::TVPGetRuntimeProfileStats();
+    stats->emoteProgressCalls = profile.emoteProgressCalls;
+    stats->emoteProgressTimeNS = profile.emoteProgressTimeNS;
+    stats->emotePrepareCalls = profile.emotePrepareCalls;
+    stats->emotePrepareTimeNS = profile.emotePrepareTimeNS;
+    stats->emoteDrawCalls = profile.emoteDrawCalls;
+    stats->emoteDrawTimeNS = profile.emoteDrawTimeNS;
+    stats->emoteCaptureProfileCalls = profile.emoteCaptureProfileCalls;
+    stats->emoteCaptureTimeNS = profile.emoteCaptureTimeNS;
+    stats->meshDrawCalls = profile.meshDrawCalls;
+    stats->meshVertices = profile.meshVertices;
+    stats->meshIndices = profile.meshIndices;
+    stats->meshCPUTimeNS = profile.meshCPUTimeNS;
+    stats->meshValidationTimeNS = profile.meshValidationTimeNS;
+    stats->meshBufferAllocations = profile.meshBufferAllocations;
+    stats->meshBufferBytes = profile.meshBufferBytes;
+    stats->meshBufferAllocationTimeNS = profile.meshBufferAllocationTimeNS;
+    stats->metalSubmits = profile.metalSubmits;
+    stats->metalSyncWaits = profile.metalSyncWaits;
+    stats->metalSyncWaitTimeNS = profile.metalSyncWaitTimeNS;
+    stats->metalQueueWaitTimeNS = profile.metalQueueWaitTimeNS;
+    stats->stepEventTimeNS = stepEventTimeNS;
+    stats->stepIterateTimeNS = stepIterateTimeNS;
 
     if (SDL_Window *window = MikageKRKRGetSDLWindow()) {
         int width = 0, height = 0;
