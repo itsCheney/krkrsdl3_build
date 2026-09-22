@@ -362,6 +362,9 @@ extern "C" bool MikageKRKRStart(const char *gamePath,
             activeRenderer = renderer && *renderer ? renderer : "metal";
             stopRequested = false;
             resetStats();
+            // Capture diagnostics are session-scoped, just like Layer stats.
+            // Do not let a previous game make GPU-copy/fallback counts ambiguous.
+            krkrsdl3::TVPResetEmoteCaptureStats();
             appState = nullptr;
 
             SDL_AppResult result = SDL_AppInit(
