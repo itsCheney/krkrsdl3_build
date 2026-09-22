@@ -95,6 +95,13 @@ typedef struct MikageKRKRStats {
     // separated "method:count" entries; multiple-input keys include [N].
     char layerMultipleInputMethods[512];
     char layerUnsupportedMethods[512];
+
+    // D3DAdaptor captureCanvas bridge diagnostics.
+    uint64_t emoteCaptureCalls;
+    uint64_t emoteCaptureCPUFallbacks;
+    uint64_t emoteCaptureCPUBytes;
+    uint64_t emoteCaptureGPUCopies;
+    uint64_t emoteCaptureGPUBytes;
 } MikageKRKRStats;
 
 bool MikageKRKRStart(const char *gamePath,

@@ -626,6 +626,13 @@ extern "C" bool MikageKRKRGetStats(MikageKRKRStats *stats)
     std::strncpy(stats->layerUnsupportedMethods, unsupportedMethods.c_str(),
                  sizeof(stats->layerUnsupportedMethods) - 1);
 
+    const auto emoteCapture = krkrsdl3::TVPGetEmoteCaptureStats();
+    stats->emoteCaptureCalls = emoteCapture.calls;
+    stats->emoteCaptureCPUFallbacks = emoteCapture.cpuFallbacks;
+    stats->emoteCaptureCPUBytes = emoteCapture.cpuBytes;
+    stats->emoteCaptureGPUCopies = emoteCapture.gpuCopies;
+    stats->emoteCaptureGPUBytes = emoteCapture.gpuBytes;
+
     if (SDL_Window *window = MikageKRKRGetSDLWindow()) {
         int width = 0, height = 0;
         SDL_GetWindowSizeInPixels(window, &width, &height);
