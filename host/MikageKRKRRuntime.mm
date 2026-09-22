@@ -672,6 +672,8 @@ extern "C" bool MikageKRKRGetStats(MikageKRKRStats *stats)
     stats->emoteMeshBuildTimeNS = profile.emoteMeshBuildTimeNS;
     stats->emoteMeshVerticesBuilt = profile.emoteMeshVerticesBuilt;
     stats->emoteDeformedVerticesBuilt = profile.emoteDeformedVerticesBuilt;
+    stats->emoteGPUDeformDraws = profile.emoteGPUDeformDraws;
+    stats->emoteGPUDeformVertices = profile.emoteGPUDeformVertices;
     stats->meshDrawCalls = profile.meshDrawCalls;
     stats->meshVertices = profile.meshVertices;
     stats->meshIndices = profile.meshIndices;

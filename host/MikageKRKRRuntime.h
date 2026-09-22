@@ -133,6 +133,8 @@ typedef struct MikageKRKRStats {
     uint64_t emoteMeshBuildTimeNS;
     uint64_t emoteMeshVerticesBuilt;
     uint64_t emoteDeformedVerticesBuilt;
+    uint64_t emoteGPUDeformDraws;
+    uint64_t emoteGPUDeformVertices;
 
     uint64_t meshDrawCalls;
     uint64_t meshVertices;
