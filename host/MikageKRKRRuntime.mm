@@ -619,6 +619,13 @@ extern "C" bool MikageKRKRGetStats(MikageKRKRStats *stats)
     stats->layerGPURejectPerspective =
         layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::Perspective)];
 
+    const auto multipleInputMethods = TVPGetMetalLayerMultipleInputMethodSummary();
+    const auto unsupportedMethods = TVPGetMetalLayerUnsupportedMethodSummary();
+    std::strncpy(stats->layerMultipleInputMethods, multipleInputMethods.c_str(),
+                 sizeof(stats->layerMultipleInputMethods) - 1);
+    std::strncpy(stats->layerUnsupportedMethods, unsupportedMethods.c_str(),
+                 sizeof(stats->layerUnsupportedMethods) - 1);
+
     if (SDL_Window *window = MikageKRKRGetSDLWindow()) {
         int width = 0, height = 0;
         SDL_GetWindowSizeInPixels(window, &width, &height);

@@ -90,6 +90,11 @@ typedef struct MikageKRKRStats {
     uint64_t layerGPURejectBackendFailure;
     uint64_t layerGPURejectTriangles;
     uint64_t layerGPURejectPerspective;
+
+    // Top cumulative reject methods for the current Layer session. Comma-
+    // separated "method:count" entries; multiple-input keys include [N].
+    char layerMultipleInputMethods[512];
+    char layerUnsupportedMethods[512];
 } MikageKRKRStats;
 
 bool MikageKRKRStart(const char *gamePath,
