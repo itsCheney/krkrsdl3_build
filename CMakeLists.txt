@@ -91,14 +91,6 @@ option(USE_FFMPEG "Use FFmpeg for video/audio decoding" ON)
 # 图形后端编译选项
 option(USE_RENDER_GL "OpenGL 3.3+/OpenGLES 3.0+ backend" ON)
 option(USE_RENDER_VK "Vulkan backend" ON)
-set(KRKR_METAL_DEFAULT OFF)
-if((IOS OR MACOS) AND USE_SDL3 AND NOT ONLYCONSOLE)
-    set(KRKR_METAL_DEFAULT ON)
-endif()
-option(USE_RENDER_METAL "Native Metal backend (Apple SDL3 only)" ${KRKR_METAL_DEFAULT})
-if(USE_RENDER_METAL AND (NOT (IOS OR MACOS) OR NOT USE_SDL3 OR ONLYCONSOLE))
-    message(FATAL_ERROR "USE_RENDER_METAL requires an Apple SDL3 full runtime")
-endif()
 option(KRKR_HOST_LIBRARY "Build KRKR as an embeddable iOS framework" OFF)
 
 # 建立项目

@@ -43,7 +43,6 @@ set(KRKRSDL_CORE_SRC
     ${KRKRSDL_CORE_PATH}/render/LayerManager.cpp
     ${KRKRSDL_CORE_PATH}/render/LayerTreeOwner.cpp
     ${KRKRSDL_CORE_PATH}/render/RenderManager.cpp
-    ${KRKRSDL_CORE_PATH}/render/MetalLayerRenderManager.cpp
     ${KRKRSDL_CORE_PATH}/render/TVPTrans.cpp
 	${KRKRSDL_CORE_PATH}/render/TVPColor.cpp
     ${KRKRSDL_CORE_PATH}/render/TVPCompositor.cpp
@@ -105,10 +104,6 @@ set(KRKRSDL_CORE_FFMPEG_SRC
 
 set(KRKRSDL_CORE_OPENGL_SRC
     ${KRKRSDL_CORE_PATH}/render/backend/GLRenderBackend.cpp
-)
-
-set(KRKRSDL_CORE_METAL_SRC
-    ${KRKRSDL_CORE_PATH}/render/backend/MetalRenderBackend.mm
 )
 
 set(KRKRSDL_CORE_VULKAN_SRC

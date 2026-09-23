@@ -40,31 +40,6 @@ typedef struct MikageKRKRStats {
     // Main-thread step wall time (includes script/decode and any GPU waits).
     double cpuFrameTimeMilliseconds;
     double maxCpuFrameTimeMilliseconds;
-    // Last completed GPU submission, excluding queue wait; -1 if unavailable.
-    double gpuSubmissionTimeMilliseconds;
-    // Last frame's command-capacity + drawable wait; part of main-thread time.
-    double presentationWaitTimeMilliseconds;
-    // Cumulative counters for the current Layer session (not Emote meshes).
-    uint64_t gpuLayerComposition;
-    uint64_t gpuLayerOperations;
-    uint64_t layerCPUFallbacks;
-    uint64_t layerUploadedBytes;
-    uint64_t layerReadbackBytes;
-    uint64_t layerGPUResidentBytes;
-    uint64_t layerCPUCacheBytes;
-    uint64_t layerPinnedCPUTextures;
-    // GPU->CPU readback attribution. Each pair reports cumulative bytes and
-    // events for one source; the byte buckets sum to layerReadbackBytes.
-    uint64_t layerReadbackLockBytes;
-    uint64_t layerReadbackLockCount;
-    uint64_t layerReadbackFallbackBytes;
-    uint64_t layerReadbackFallbackCount;
-    uint64_t layerReadbackPersistentBytes;
-    uint64_t layerReadbackPersistentCount;
-    uint64_t layerReadbackPixelsBytes;
-    uint64_t layerReadbackPixelsCount;
-    uint64_t layerReadbackDetachBytes;
-    uint64_t layerReadbackDetachCount;
 } MikageKRKRStats;
 
 bool MikageKRKRStart(const char *gamePath,
@@ -86,18 +61,6 @@ bool MikageKRKRGetStats(MikageKRKRStats *stats);
 bool MikageKRKRIsRunning(void);
 const char *MikageKRKRLastError(void);
 void *MikageKRKRNativeWindow(void);
-
-// On-demand native GPU screenshot. Call on the main thread with a zeroed frame.
-// Top-down straight-alpha RGBA8; no CPU copy is retained between captures.
-// On success the caller owns pixels and must release it using FreeCapturedFrame.
-typedef struct MikageKRKRCapturedFrame {
-    uint8_t *pixels;
-    int32_t width;
-    int32_t height;
-    int32_t pitch;
-} MikageKRKRCapturedFrame;
-bool MikageKRKRCaptureFrame(MikageKRKRCapturedFrame *frame);
-void MikageKRKRFreeCapturedFrame(MikageKRKRCapturedFrame *frame);
 
 #ifdef __cplusplus
 }

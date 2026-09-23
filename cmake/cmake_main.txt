@@ -36,12 +36,6 @@ if(USE_RENDER_VK)
     add_definitions(-D_KRKRSDL3_USE_VULKAN=1)
 endif()
 
-if(USE_RENDER_METAL)
-    list(APPEND KRKRSDL_SRC ${KRKRSDL_CORE_METAL_SRC})
-    add_definitions(-D_KRKRSDL3_USE_METAL=1)
-    set_source_files_properties(${KRKRSDL_CORE_METAL_SRC} PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
-endif()
-
 #
 # 2.确定目标文件
 #
@@ -295,9 +289,6 @@ elseif(MACOS)
     if(USE_RENDER_GL)
         target_link_libraries(${PROJECT_NAME} PRIVATE "-framework OpenGL")
     endif()
-    if(USE_RENDER_METAL)
-        target_link_libraries(${PROJECT_NAME} PRIVATE "-framework Metal")
-    endif()
 elseif(IOS)
     target_link_libraries(${PROJECT_NAME} PRIVATE
         "-framework Foundation"
@@ -307,7 +298,6 @@ elseif(IOS)
         "-framework AVFoundation"
         "-framework AudioToolbox"
         "-framework GameController"
-        "-framework Metal"
         "-framework OpenGLES"
     )
 endif()
