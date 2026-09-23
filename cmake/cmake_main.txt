@@ -298,6 +298,7 @@ elseif(IOS)
         "-framework AVFoundation"
         "-framework AudioToolbox"
         "-framework GameController"
+        "-framework Metal"
         "-framework OpenGLES"
     )
 endif()
