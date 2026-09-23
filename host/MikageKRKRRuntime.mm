@@ -706,6 +706,20 @@ extern "C" bool MikageKRKRGetStats(MikageKRKRStats *stats)
     stats->metalRingFallbackBytes = profile.metalRingFallbackBytes;
     stats->stepEventTimeNS = stepEventTimeNS;
     stats->stepIterateTimeNS = stepIterateTimeNS;
+    stats->metalRenderEncoders = profile.metalRenderEncoders;
+    stats->metalComputeEncoders = profile.metalComputeEncoders;
+    stats->metalBlitEncoders = profile.metalBlitEncoders;
+    stats->metalLayerRectSnapshots = profile.metalLayerRectSnapshots;
+    stats->metalLayerRectSnapshotBytes = profile.metalLayerRectSnapshotBytes;
+    stats->metalSurfaceUploadBytes = profile.metalSurfaceUploadBytes;
+    stats->emoteMaskClears = profile.emoteMaskClears;
+    stats->emoteMaskDraws = profile.emoteMaskDraws;
+    stats->emoteUniqueMaskGroups = profile.emoteUniqueMaskGroups;
+    stats->emoteLayerGPUCopies = profile.emoteLayerGPUCopies;
+    stats->emoteLayerGPUCopyBytes = profile.emoteLayerGPUCopyBytes;
+    stats->emoteLayerCPUReadbacks = profile.emoteLayerCPUReadbacks;
+    stats->emoteLayerCPUReadbackBytes = profile.emoteLayerCPUReadbackBytes;
+    stats->emoteLayerCPUReadbackTimeNS = profile.emoteLayerCPUReadbackTimeNS;
 
     if (SDL_Window *window = MikageKRKRGetSDLWindow()) {
         int width = 0, height = 0;

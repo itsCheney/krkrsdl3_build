@@ -166,6 +166,22 @@ typedef struct MikageKRKRStats {
     uint64_t metalRingFallbackBytes;
     uint64_t stepEventTimeNS;
     uint64_t stepIterateTimeNS;
+    // Session-cumulative command generation. Difference consecutive heartbeats
+    // and divide by their frame delta for a per-frame average.
+    uint64_t metalRenderEncoders;
+    uint64_t metalComputeEncoders;
+    uint64_t metalBlitEncoders;
+    uint64_t metalLayerRectSnapshots;
+    uint64_t metalLayerRectSnapshotBytes;
+    uint64_t metalSurfaceUploadBytes;
+    uint64_t emoteMaskClears;
+    uint64_t emoteMaskDraws;
+    uint64_t emoteUniqueMaskGroups;
+    uint64_t emoteLayerGPUCopies;
+    uint64_t emoteLayerGPUCopyBytes;
+    uint64_t emoteLayerCPUReadbacks;
+    uint64_t emoteLayerCPUReadbackBytes;
+    uint64_t emoteLayerCPUReadbackTimeNS;
 } MikageKRKRStats;
 
 bool MikageKRKRStart(const char *gamePath,
