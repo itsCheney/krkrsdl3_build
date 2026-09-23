@@ -1,4 +1,4 @@
 [submodule "cpp"]
 	path = cpp
 	url = https://github.com/itsCheney/krkrsdl3.git
-	branch = readback_fix_experimental
+	branch = metal_dev
