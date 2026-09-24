@@ -87,3 +87,26 @@ emoteplayer 是一个 **Live2D 式（EMOTE/PSB 格式）动画播放器插件**�
 | 混合/蒙版语义 | 后端 `SetBlendMode` / `SetMask`（core/render/backend/）与插件 draw 调用处 |
 | 输出方式（去回读直通 GPU） | `EmotePlayer::drawToTarget`（emoteplayerclass.cpp，已实现，D3DEmotePlayer 使用） |
 | 图标格式/解码 | `emotefile.cpp` 的 readIconTobuffer / ensureLoad |
+
+## 6. 资源加载与脚本对象构建
+
+- `ResourceManager` 的 `cacheData` 属于各个 manager。原生 D3D 播放器默认
+  创建独立 manager，clone 才显式共享；不能假定它是全局缓存。
+- 脚本 `ResourceManager.load()` 仍返回新建的完整 PSB 对象树，即使文件已在
+  缓存中。脚本可修改返回的数组和字典，不能直接把同一可变 root 交给多个调用者。
+- 原生 `D3DEmotePlayer::load()` 不使用脚本 root，改走 `ensureLoaded()`，省去
+  构建后立即销毁完整对象树的开销。文件加载失败不会发布到资源缓存。
+- `getVariableFrameList()` 经 `readVariableFrameList()` 按 PSB 偏移查找
+  `metadata.variableList`，只构建匹配变量的 `frameList`。返回值仍由原解码器
+  生成，保留额外字段、嵌套对象、类型和顺序，并且每次调用独立可变。
+- PSB 数组构建使用数字索引写入，省去逐元素调用脚本 `Array.add` 的分派。
+  数组和字典的构建过程由 variant 持有，解析异常时释放已建子树。
+
+慢加载日志中的 `fileLoadMS` 包含读取、解压、解密和原生动画树解析，
+`rootMS` 是脚本对象树构建。`rootRequested=0` 标识原生入口跳过了 root。
+`managerId` 与同一进程内稳定的匿名 `resourceId`，配合 cache hit/miss 和
+unload 计数，可区分跨 manager 加载与卸载后重载；日志不记录资源路径。
+
+`Tests/EmoteMetadata` 将生产 PSB 读取函数与真实 TJS VM、PSB 数组解码器
+一起运行，验证完整 root 与局部查询的结果、可变对象隔离、类型/字段兼容，
+以及查询时不读取无关的大型动画子树。该夹具不验证解压、解密或真机帧率。
