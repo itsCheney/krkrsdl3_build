@@ -54,6 +54,16 @@ CPU methods currently read complete operand textures once per content version.
 The backend additionally exposes tightly packed local RGBA/R8 readback and
 validates region bounds. No permanent CPU mirror is created for GPU-only textures.
 
+Single-pixel queries use a bounded sparse cache. Rectangle writes invalidate only
+samples inside the written area; alpha-only hit tests also retain exact alpha
+through RGB-only/HDA operations. Alpha-changing operations, unknown GPU writes
+and full Emote captures invalidate affected samples. CPU write uploads invalidate
+samples taken before an outstanding pointer was modified. An uncached query still
+reads the current GPU pixels synchronously; hit testing never substitutes an old
+animation frame. ClearTarget retains its render encoder so the following Emote
+mesh or mask draws share the clear pass; transfers, compute and target changes
+close that encoder in order.
+
 Layers, character/cache resources and deferred deletions are cleared before
 manager unbinding and backend shutdown. Any intentionally retained texture is
 detached into CPU authority before its backend is destroyed. GPU resources never
@@ -62,6 +72,14 @@ escape into the process-lifetime method cache.
 HUD/diagnostics report Layer composition separately from presentation, with
 cumulative GPU operations, CPU fallbacks, upload/readback bytes, GPU resident
 bytes, CPU cache bytes and pinned CPU texture count.
+
+Steps taking at least 50 ms produce a `runtime.slowFrames` summary at most once
+per statistics window (one second). Its event/iterate durations and event count
+belong to the same worst step, and include blocking waits. Slow Emote load/play
+calls emit `emote.slowOperation` at most once per second per operation type;
+resource-load reports separate file loading from root TJS object construction,
+including cache hits. These timings supplement rather than replace device GPU
+profiling.
 
 ## Validation
 

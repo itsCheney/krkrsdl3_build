@@ -162,6 +162,10 @@ Uint64 frameWorkTotal = 0, frameWorkMax = 0;
 double currentCpuFrameTimeMS = 0, currentMaxCpuFrameTimeMS = 0;
 Uint64 stepEventTimeNS = 0, stepIterateTimeNS = 0;
 constexpr Uint64 nanosecondsPerSecond = 1000000000ULL;
+constexpr Uint64 slowFrameThresholdNS = 50000000ULL;
+Uint64 slowFrameCount = 0;
+Uint64 peakFrameEventTimeNS = 0, peakFrameIterateTimeNS = 0;
+Uint64 peakFrameEventCount = 0;
 
 void resetStats()
 {
@@ -174,9 +178,12 @@ void resetStats()
     frameWorkTotal = frameWorkMax = 0;
     currentCpuFrameTimeMS = currentMaxCpuFrameTimeMS = 0;
     stepEventTimeNS = stepIterateTimeNS = 0;
+    slowFrameCount = 0;
+    peakFrameEventTimeNS = peakFrameIterateTimeNS = peakFrameEventCount = 0;
 }
 
-void recordFrame(Uint64 presentedAt, Uint64 workDuration)
+void recordFrame(Uint64 presentedAt, Uint64 workDuration,
+                 Uint64 eventDuration, Uint64 iterateDuration, Uint64 eventCount)
 {
     if (!statsWindowStarted)
         statsWindowStarted = presentedAt;
@@ -185,7 +192,13 @@ void recordFrame(Uint64 presentedAt, Uint64 workDuration)
     previousFrameAt = presentedAt;
     frameCount++;
     frameWorkTotal += workDuration;
-    if (workDuration > frameWorkMax) frameWorkMax = workDuration;
+    if (workDuration >= slowFrameThresholdNS) ++slowFrameCount;
+    if (workDuration > frameWorkMax) {
+        frameWorkMax = workDuration;
+        peakFrameEventTimeNS = eventDuration;
+        peakFrameIterateTimeNS = iterateDuration;
+        peakFrameEventCount = eventCount;
+    }
     Uint64 elapsed = presentedAt - statsWindowStarted;
     if (elapsed >= nanosecondsPerSecond)
     {
@@ -196,7 +209,22 @@ void recordFrame(Uint64 presentedAt, Uint64 workDuration)
                 static_cast<double>(frameIntervalTotal) / (frameCount - 1) / 1000000.0;
         currentCpuFrameTimeMS = static_cast<double>(frameWorkTotal) / frameCount / 1000000.0;
         currentMaxCpuFrameTimeMS = static_cast<double>(frameWorkMax) / 1000000.0;
+        if (slowFrameCount) {
+            // At most one summary per stats window. These are wall durations,
+            // including GPU waits, and all peak fields describe the same step.
+            char message[256];
+            std::snprintf(message, sizeof(message),
+                "runtime.slowFrames count=%llu peakWallMS=%.3f peakEventMS=%.3f "
+                "peakIterateMS=%.3f peakEvents=%llu",
+                static_cast<unsigned long long>(slowFrameCount), currentMaxCpuFrameTimeMS,
+                static_cast<double>(peakFrameEventTimeNS) / 1000000.0,
+                static_cast<double>(peakFrameIterateTimeNS) / 1000000.0,
+                static_cast<unsigned long long>(peakFrameEventCount));
+            MikageKRKRLogMessage("performance", 3, message);
+        }
         frameWorkTotal = frameWorkMax = 0;
+        slowFrameCount = 0;
+        peakFrameEventTimeNS = peakFrameIterateTimeNS = peakFrameEventCount = 0;
         statsWindowStarted = presentedAt;
         previousFrameAt = 0;
         frameIntervalTotal = 0;
@@ -418,13 +446,16 @@ extern "C" MikageKRKRStepResult MikageKRKRStep(void)
     try {
         const Uint64 frameStarted = SDL_GetTicksNS();
         const Uint64 eventsStarted = frameStarted;
+        Uint64 eventCount = 0;
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
+            ++eventCount;
             SDL_AppResult result = SDL_AppEvent(appState, &event);
             if (result != SDL_APP_CONTINUE)
                 return finishForResult(result);
         }
-        stepEventTimeNS += SDL_GetTicksNS() - eventsStarted;
+        const Uint64 eventDuration = SDL_GetTicksNS() - eventsStarted;
+        stepEventTimeNS += eventDuration;
 
         if (stopRequested)
             return finishForResult(SDL_APP_SUCCESS);
@@ -436,10 +467,12 @@ extern "C" MikageKRKRStepResult MikageKRKRStep(void)
         krkrsdl3::TVPBeginRuntimeStep();
         SDL_AppResult result = SDL_AppIterate(appState);
         krkrsdl3::TVPEndRuntimeStep();
-        stepIterateTimeNS += SDL_GetTicksNS() - iterateStarted;
+        const Uint64 frameFinished = SDL_GetTicksNS();
+        const Uint64 iterateDuration = frameFinished - iterateStarted;
+        stepIterateTimeNS += iterateDuration;
         if (result == SDL_APP_CONTINUE) {
-            const Uint64 frameFinished = SDL_GetTicksNS();
-            recordFrame(frameFinished, frameFinished - frameStarted);
+            recordFrame(frameFinished, frameFinished - frameStarted,
+                        eventDuration, iterateDuration, eventCount);
         }
         return finishForResult(result);
     } catch (const eTJS &error) {
