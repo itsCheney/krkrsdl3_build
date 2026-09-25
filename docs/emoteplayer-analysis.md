@@ -92,6 +92,12 @@ emoteplayer 是一个 **Live2D 式（EMOTE/PSB 格式）动画播放器插件**�
 
 - `ResourceManager` 的 `cacheData` 属于各个 manager。原生 D3D 播放器默认
   创建独立 manager，clone 才显式共享；不能假定它是全局缓存。
+- 归档内 PSB 的已解压/解密字节及字符串、名称、资源块索引另有会话共享缓存，
+  键为规范资源路径和解密种子。保留预算为 64 MiB，按 LRU 淘汰，超大资源
+  不进入缓存。每个 `emotefile` 保留独立读取游标和索引副本，仍重新构建自己的
+  动画树、变量、图标像素及 GPU 纹理；共享数据不含 TJS 对象或后端句柄。
+  散文件、自定义 Emote 解密回调及启用 XP3 内容/提取过滤器时绕过共享缓存，
+  保证文件修改、动态归档内容和回调副作用可见。
 - 脚本 `ResourceManager.load()` 仍返回新建的完整 PSB 对象树，即使文件已在
   缓存中。脚本可修改返回的数组和字典，不能直接把同一可变 root 交给多个调用者。
 - 原生 `D3DEmotePlayer::load()` 不使用脚本 root，改走 `ensureLoaded()`，省去
@@ -106,7 +112,22 @@ emoteplayer 是一个 **Live2D 式（EMOTE/PSB 格式）动画播放器插件**�
 `rootMS` 是脚本对象树构建。`rootRequested=0` 标识原生入口跳过了 root。
 `managerId` 与同一进程内稳定的匿名 `resourceId`，配合 cache hit/miss 和
 unload 计数，可区分跨 manager 加载与卸载后重载；日志不记录资源路径。
+`sharedCacheHit` 只表示本次从会话缓存取到了已解码数据，本地 manager 命中
+不会重复计算。`sharedHits/sharedMisses/sharedBytes/sharedEntries/sharedEvictions`
+报告共享缓存累计计数及当前保留量；`customDecrypt` 表示本次调用自定义解密，
+`archiveFilter` 标识因 XP3 过滤器而绕过共享缓存。
+
+`unload()`/`unloadAll()` 释放 manager 自己的文件，供后续播放器复用的只读
+数据可继续保留。`clearCache()`、解密配置更换、显式 storage/archive 清理、
+最小化级别及以上内存整理，以及游戏启动/退出会清除保留项。规范路径写入、
+文件截断和 XP3 过滤器更换也会使相关数据失效；失效前开始的加载不能在随后
+把旧内容重新发布进缓存。已运行播放器通过只读引用继续使用原来的数据，
+因此 64 MiB 是缓存的保留预算，并非全部活动资源的内存上限。外部替换归档
+遵循引擎原有的显式清理 storage/archive 缓存约定。
 
 `Tests/EmoteMetadata` 将生产 PSB 读取函数与真实 TJS VM、PSB 数组解码器
 一起运行，验证完整 root 与局部查询的结果、可变对象隔离、类型/字段兼容，
-以及查询时不读取无关的大型动画子树。该夹具不验证解压、解密或真机帧率。
+以及查询时不读取无关的大型动画子树。共享加载器夹具还验证原始/LZ4/MDF
+容器、种子解密、自定义回调绕过、独立游标、失效和生命周期；动画树生成
+使用测试替身。独立 LRU 和会话脚本验证预算、并发访问、异常发布及退出清理。
+这些检查不代表真机帧率或完整游戏兼容性测试。
