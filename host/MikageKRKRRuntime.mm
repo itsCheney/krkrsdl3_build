@@ -71,6 +71,7 @@ extern "C" void MikageKRKRSetSkippedMovies(const char *newlineSeparatedNames)
 extern "C" void MikageKRKRSetLogCallback(MikageKRKRLogCallback callback)
 {
     diagnosticCallback.store(callback, std::memory_order_release);
+    SDL_SetHint("MIKAGE_METAL_DIAGNOSTICS", callback ? "1" : "0");
     SDL_LogOutputFunction current = nullptr;
     void *context = nullptr;
     SDL_GetLogOutputFunction(&current, &context);
