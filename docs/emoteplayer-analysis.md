@@ -148,3 +148,24 @@ GPU 时间戳，也不增加命令提交、同步等待或 GPU 屏障。
 操作每秒最多一条；回读记录区域尺寸及其中的 GPU 同步等待时间。这些是
 主线程等待耗时，不能当作某个 GPU 阶段的执行时间。具体字段见
 `Tests/MetalRenderBackend/README.md`。
+
+慢单点查询用同一个 `pointQueryID` 关联三条记录：`metal.cpuWait` 提供 Metal
+命令编号/同步等待，`metal.pointRead` 提供读取入口、触发来源、图层对象标识、
+纹理编号/版本及缓存失效原因，`metal.pointCaller` 提供最多四层、512 字节的
+TJS 调用信息。详情和调用栈只在原有慢回读限频通过后采集，不增加 GPU 操作。
+
+`source` 区分 Layer 命中检测、Layer/Bitmap 的颜色与透明度读取；`trigger`
+记录输入、重检或脚本 `getLayerAt` 入口，嵌套显式重检保留 `parentTrigger`。
+这些标记描述代码入口，并非硬件触摸事件的独立证明。`owner` 是当前进程内
+对象标识，可能随对象销毁而复用；单调增长的 `textureID` 用于区分纹理实例。
+
+`miss=invalidated` 的 `invalidation/writer/invalidatedVersion` 保存该缓存点
+第一次失效的写入，`lastWrite/lastWriter/lastRect` 单独表示纹理最近的写入。
+`miss=notCached` 只表示当前缓存中无该坐标，可包含首次访问或槽位被替换，
+不能据此断定发生了整图失效。Emote 覆盖来源标记为 `emote.captureCanvas`
+或 `emote.drawToLayer`。
+
+Release 构建的脚本栈由主机在外层执行边界取得独立引用，保留到会话完全退出；
+不切换 `TJSEnableDebugMode`。只在当前 VM 线程同步读取栈，关闭日志立即停止
+查询采集。缺少调试映射的预编译脚本可能给出默认行号，所以输出标记
+`positions=unverified`；没有可用脚本栈则为 `traceState=unavailable`。

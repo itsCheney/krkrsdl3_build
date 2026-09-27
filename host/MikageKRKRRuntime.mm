@@ -18,6 +18,7 @@
 #include "TVPCompositor.h"
 #include "WindowManager.h"
 #include "MetalLayerRenderManager.h"
+#include "PointReadTrace.h"
 
 namespace {
 std::atomic<MikageKRKRLogCallback> diagnosticCallback{nullptr};
@@ -72,6 +73,7 @@ extern "C" void MikageKRKRSetLogCallback(MikageKRKRLogCallback callback)
 {
     diagnosticCallback.store(callback, std::memory_order_release);
     SDL_SetHint("MIKAGE_METAL_DIAGNOSTICS", callback ? "1" : "0");
+    krkrsdl3::point_trace::SetEnabled(callback != nullptr);
     SDL_LogOutputFunction current = nullptr;
     void *context = nullptr;
     SDL_GetLogOutputFunction(&current, &context);
@@ -96,6 +98,77 @@ extern "C" void MikageKRKRSetLogCallback(MikageKRKRLogCallback callback)
 
 #include "TVPApplication.h"
 #include "tjsError.h"
+#include "tjsDebug.h"
+
+namespace {
+bool diagnosticScriptOnVMThread() { return [NSThread isMainThread]; }
+
+// The TJS tracer checks its global pointer separately on function entry/exit.
+// Switching it inside a script/native callback can therefore unbalance its
+// stack. Own a separate reference without enabling TJS debug/object tracing,
+// acquire only at an outer host boundary, and retain it until session teardown.
+struct DiagnosticScriptTraceState
+{
+    unsigned hostDepth = 0;
+    bool sessionActive = false;
+    bool ownsReference = false;
+
+    void Enter(bool requested) noexcept
+    {
+        if (hostDepth++ == 0 && requested && !ownsReference) {
+            try {
+                TJS::TJSAddRefStackTracer();
+                ownsReference = true;
+            } catch (...) {
+                // Stack attribution is optional; allocation failure must not
+                // prevent the game from starting or processing an event.
+            }
+        }
+    }
+    void ReleaseIfIdle() noexcept
+    {
+        if (hostDepth == 0 && !sessionActive && ownsReference) {
+            ownsReference = false;
+            TJS::TJSReleaseStackTracer();
+        }
+    }
+    void Leave() noexcept
+    {
+        --hostDepth;
+        ReleaseIfIdle();
+    }
+    void BeginSession() noexcept { sessionActive = true; }
+    void EndSession() noexcept
+    {
+        sessionActive = false;
+        ReleaseIfIdle();
+    }
+};
+DiagnosticScriptTraceState diagnosticScriptTrace;
+
+struct DiagnosticScriptTraceScope
+{
+    bool entered = diagnosticScriptOnVMThread();
+    DiagnosticScriptTraceScope() noexcept
+    {
+        if (entered)
+            diagnosticScriptTrace.Enter(diagnosticCallback.load(std::memory_order_acquire) != nullptr);
+    }
+    ~DiagnosticScriptTraceScope()
+    {
+        if (entered) diagnosticScriptTrace.Leave();
+    }
+    void BeginSession() noexcept
+    {
+        if (entered) diagnosticScriptTrace.BeginSession();
+    }
+};
+
+void endDiagnosticScriptTraceSession() noexcept
+{
+    if (diagnosticScriptOnVMThread()) diagnosticScriptTrace.EndSession();
+}
+}
 
 void MikageKRKRForwardLog(const ttstr &line)
 {
@@ -244,6 +317,7 @@ void resetAfterStartFailure(const std::string &message)
             // A partially initialized runtime must not throw across the C boundary.
         }
     }
+    endDiagnosticScriptTraceSession();
     TVPSetGameRunningOrientation(false);
     MikageKRKRSetWindowScene(nullptr);
     running = false;
@@ -279,6 +353,7 @@ void finish(SDL_AppResult result, const char *message)
         result = SDL_APP_FAILURE;
         lastError = "Unknown C++ exception during KRKR shutdown.";
     }
+    endDiagnosticScriptTraceSession();
     TVPSetGameRunningOrientation(false);
     MikageKRKRSetWindowScene(nullptr);
     [[AVAudioSession sharedInstance]
@@ -327,6 +402,7 @@ extern "C" bool MikageKRKRStart(const char *gamePath,
                                   MikageKRKRCompletionCallback completion,
                                   void *context)
 {
+    DiagnosticScriptTraceScope traceScope;
     if (running) {
         lastError = "A KRKR session is already running.";
         return false;
@@ -399,6 +475,7 @@ extern "C" bool MikageKRKRStart(const char *gamePath,
             krkrsdl3::TVPResetRuntimeProfileStats();
             appState = nullptr;
 
+            traceScope.BeginSession();
             SDL_AppResult result = SDL_AppInit(
                 &appState,
                 static_cast<int>(argv.size()),
@@ -441,6 +518,7 @@ extern "C" bool MikageKRKRStart(const char *gamePath,
 
 extern "C" MikageKRKRStepResult MikageKRKRStep(void)
 {
+    DiagnosticScriptTraceScope traceScope;
     if (!running)
         return MIKAGE_KRKR_STEP_IDLE;
 
@@ -489,6 +567,7 @@ extern "C" MikageKRKRStepResult MikageKRKRStep(void)
 
 extern "C" bool MikageKRKRRequestExit(void)
 {
+    DiagnosticScriptTraceScope traceScope;
     if (!running || !foreground || !TVPMainWindow)
         return false;
     try {
@@ -508,6 +587,7 @@ extern "C" bool MikageKRKRRequestExit(void)
 
 extern "C" void MikageKRKRRequestStop(void)
 {
+    DiagnosticScriptTraceScope traceScope;
     try {
         if (running) {
             stopRequested = true;
@@ -521,6 +601,7 @@ extern "C" void MikageKRKRRequestStop(void)
 
 extern "C" bool MikageKRKRSetForeground(bool value)
 {
+    DiagnosticScriptTraceScope traceScope;
     MikageKRKRLogMessage("audio", 3, value ? "foreground.resume.requested" : "foreground.suspend.requested");
     try {
         if (foreground == value)
