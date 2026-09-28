@@ -169,3 +169,27 @@ Release 构建的脚本栈由主机在外层执行边界取得独立引用，保
 不切换 `TJSEnableDebugMode`。只在当前 VM 线程同步读取栈，关闭日志立即停止
 查询采集。缺少调试映射的预编译脚本可能给出默认行号，所以输出标记
 `positions=unverified`；没有可用脚本栈则为 `traceState=unavailable`。
+
+### 光标属性刷新与整图覆盖
+
+原生 `TVPWindow` 的光标和悬浮提示显示接口目前为空实现。内置 Basic、D3D
+绘制设备仅在管理这个原生窗口时，关闭 `NotifyMouseCursorChange` /
+`NotifyHintChange` 为更新显示而做的图层查询，避免脚本设置 `cursor` 时同步
+读取 GPU alpha。属性值仍保存；这些无输出的属性刷新不再附带触发 `onHitTest`。
+真实鼠标/触摸、输入重检和显式脚本查询仍走原命中检测。自定义 owner、窗口或
+设备子类默认保留原行为；解绑、更换 owner 和设备销毁恢复保守策略，不增加
+对外接口的虚函数。剩余属性查询标记为 `cursorChange` / `hintChange`。
+
+Emote 完整帧经 `CopyMainImageFromGPUTarget` 写入。独占、可写 GPU 图像直接
+覆盖；共享或静态图像先分配同尺寸的新纹理，只复制新帧，成功后才替换引用，
+省掉原来 `Independ()` 对即将丢弃的旧图像做的完整复制。失败时不发布候选纹理，
+独占的 CPU 固定地址及活动租约仍拒绝 GPU 覆盖。后端返回 false 必须表示未
+改写目标内容；目前 Metal 在编码复制前完成所有失败检查。
+
+完整 GPU 复制还校验实际图像尺寸。图层矩形可小于图像，CPU 回退因此按实际
+图像边界、源/目标行跨度逐行复制，保留覆盖区域之外的像素。空读取或无效行
+跨度不会先打开破坏性的完整覆盖租约；目标读取通过作用域保证释放。
+
+`Tests/LayerInput` 抽取生产输入/设备生命周期方法验证策略和真实输入；
+`Tests/MetalLayer` 验证图像替换、共享隔离及失败回退。可移植测试中的设备与
+图层输入替身不能证明 iPhone 帧率，原生 Metal 路径仍由 Apple CI 和真机验收。
