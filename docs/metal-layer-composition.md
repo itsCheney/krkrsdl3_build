@@ -103,7 +103,7 @@ The matrix covers all supported methods/opacity endpoints, glyph coverage,
 subrectangles, clipping during resize, dimensions of one, sampling, flips and
 self-copy overlap. It checks exact copy/fill bytes and blend/linear error <= 1,
 GPU-to-CPU-to-GPU interleaving, cache reuse, raw pointer writes, independent
-textures, unsupported methods/transitions/affine/perspective, 729 exact Copy
+textures, unsupported methods/transitions/affine/perspective, 369 exact Copy
 affine comparisons (transforms, clipping, source subrectangles, nearest/linear,
 alpha, source/target aliases and single-pixel dimensions), a 24-call full-HD
 resident triangle burst, independent ignored references and diagnostic bridge
