@@ -858,6 +858,8 @@ extern "C" bool MikageKRKRTakeLayerTriangleProfile(MikageKRKRLayerTriangleProfil
         profile->intervalNS = s.intervalNS;
         profile->calls = s.calls;
         profile->triangleCount = s.triangleCount;
+        profile->gpuCalls = s.gpuCalls;
+        profile->gpuPixels = s.gpuPixels;
         profile->clipPixels = s.clipPixels;
         profile->maxClipPixels = s.maxClipPixels;
         profile->maxTargetPixels = s.maxTargetPixels;

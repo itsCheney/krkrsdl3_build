@@ -207,6 +207,8 @@ typedef struct MikageKRKRLayerTriangleProfile {
     uint64_t intervalNS;
     uint64_t calls;
     uint64_t triangleCount;
+    uint64_t gpuCalls;
+    uint64_t gpuPixels;
     uint64_t clipPixels;
     uint64_t maxClipPixels;
     uint64_t maxTargetPixels;

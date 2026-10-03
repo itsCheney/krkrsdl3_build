@@ -21,7 +21,17 @@ Metal presentation with software composition.
   ResizeRGBA, including integer clipping adjustments and edge extrapolation.
   Single-pixel dimensions now safely replicate their only row/column. Negative
   extrapolation uses a defined ARM-compatible unsigned conversion.
-- Other samplers, affine/perspective transforms, special text and transition
+- Copy affine quads (two triangles, one RGBA source, integer forward source
+  rectangle): nearest / fast linear / linear. Axis-aligned operations preserve
+  the software integer-rectangle path; rotations/shears preserve its clip-wide
+  inverse warp, transparent border, source +1 boundary/crop and pixel centers.
+  Metal uses split-float inverse coefficients and explicit byte interpolation.
+  Reference is ignored by Copy; aliased sources use GPU snapshots. There is no
+  CPU pixel transfer or per-operation submission/wait on the successful path.
+  `layerTriangleProfile.gpuCalls/gpuPixels` count successful interval dispatches;
+  its original fields continue to measure software fallbacks only.
+- Other samplers, affine methods, mirrored axis-aligned quads, non-affine and
+  fractional/reversed source rectangles, perspective transforms, special text and transition
   methods execute the same canonical software methods through scoped views.
   Scaled reversed source rectangles retain software fallback.
 
@@ -93,7 +103,11 @@ The matrix covers all supported methods/opacity endpoints, glyph coverage,
 subrectangles, clipping during resize, dimensions of one, sampling, flips and
 self-copy overlap. It checks exact copy/fill bytes and blend/linear error <= 1,
 GPU-to-CPU-to-GPU interleaving, cache reuse, raw pointer writes, independent
-textures, unsupported methods/transitions/affine/perspective, three session
+textures, unsupported methods/transitions/affine/perspective, 729 exact Copy
+affine comparisons (transforms, clipping, source subrectangles, nearest/linear,
+alpha, source/target aliases and single-pixel dimensions), a 24-call full-HD
+resident triangle burst, independent ignored references and diagnostic bridge
+reset/disable behavior, three session
 unbinds, and deliberately retained textures. A 120-operation ordinary Layer and 320-glyph text
 workload reports software CPU wall time and GPU encoding wall time, checks GPU
 execution and zero CPU readbacks until explicit final validation. Native tests also verify texture-alias presentation
