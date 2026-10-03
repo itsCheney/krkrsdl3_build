@@ -30,6 +30,11 @@ void MikageKRKRSetLogCallback(MikageKRKRLogCallback callback);
 // movie that is already playing.
 void MikageKRKRSetSkippedMovies(const char *newlineSeparatedNames);
 
+// Select the animation implementation for the next Start. Does not change the
+// current session or its existing/new Emote players. Default is legacy (false).
+// The host's explicit choice overrides an environment or prior SDL hint.
+void MikageKRKRSetExperimentalEmote(bool enabled);
+
 typedef struct MikageKRKRStats {
     double framesPerSecond;
     double frameTimeMilliseconds;

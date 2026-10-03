@@ -15,6 +15,7 @@
 #include <mutex>
 #include <cstdio>
 #include <cstdlib>
+#include <stdexcept>
 #include "TVPCompositor.h"
 #include "WindowManager.h"
 #include "MetalLayerRenderManager.h"
@@ -25,6 +26,7 @@ std::atomic<MikageKRKRLogCallback> diagnosticCallback{nullptr};
 std::mutex logOutputMutex;
 std::mutex skippedMoviesMutex;
 std::string skippedMovies;
+std::atomic<bool> experimentalEmote{false};
 thread_local bool mirroringKRKRLog = false;
 SDL_LogOutputFunction previousLogOutput = nullptr;
 void *previousLogContext = nullptr;
@@ -95,6 +97,20 @@ extern "C" void MikageKRKRSetLogCallback(MikageKRKRLogCallback callback)
         }
         SDL_SetLogOutputFunction(previous, previousContext);
     }
+}
+
+extern "C" void MikageKRKRSetExperimentalEmote(bool enabled)
+{
+    experimentalEmote.store(enabled, std::memory_order_relaxed);
+}
+
+static bool applyEmoteAnimationModeForStart()
+{
+    const bool enabled = experimentalEmote.load(std::memory_order_relaxed);
+    if (!SDL_SetHintWithPriority("MIKAGE_EMOTE_ANIMATION_MODE",
+        enabled ? "integrated" : "legacy", SDL_HINT_OVERRIDE)) return false;
+    MikageKRKRLogMessage("emote", 3, enabled ? "animation.integrated" : "animation.legacy");
+    return true;
 }
 
 #include "TVPApplication.h"
@@ -427,6 +443,8 @@ extern "C" bool MikageKRKRStart(const char *gamePath,
 
         try {
             MikageKRKRSetLogCallback(diagnosticCallback.load(std::memory_order_acquire));
+            if (!applyEmoteAnimationModeForStart())
+                throw std::runtime_error("Failed to select Emote animation mode.");
             // SDL defaults to playback on iOS, which ignores the Ring/Silent
             // switch. The host preference chooses normal game-style ambient
             // behavior or SDL's playback behavior before any audio device opens.
