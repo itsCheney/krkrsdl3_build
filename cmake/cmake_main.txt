@@ -325,4 +325,10 @@ elseif(IOS)
     set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/Res/DroidSansFallback.ttf PROPERTIES
         MACOSX_PACKAGE_LOCATION Resources/Res)
     target_sources(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Res/DroidSansFallback.ttf)
+    set(EMOTE_INTEGRATION_NOTICES
+        ${KRKRSDL_PLUGINS_PATH}/emoteplayer/AETHER-NOTICE.md
+        ${KRKRSDL_PLUGINS_PATH}/emoteplayer/LICENSE-AETHER-GPL-3.0.txt)
+    set_source_files_properties(${EMOTE_INTEGRATION_NOTICES} PROPERTIES
+        MACOSX_PACKAGE_LOCATION Resources/Licenses)
+    target_sources(${PROJECT_NAME} PRIVATE ${EMOTE_INTEGRATION_NOTICES})
 endif()
