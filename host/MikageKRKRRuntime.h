@@ -200,6 +200,35 @@ bool MikageKRKRRequestExit(void);
 void MikageKRKRRequestStop(void);
 bool MikageKRKRSetForeground(bool foreground);
 bool MikageKRKRGetStats(MikageKRKRStats *stats);
+// Diagnostic-only interval snapshot. Main thread; call once per heartbeat.
+// GetStats/HUD polling does not reset these counters. Times are nanoseconds;
+// cpuTimeNS includes readback waits, softwareTimeNS is nested inside it.
+typedef struct MikageKRKRLayerTriangleProfile {
+    uint64_t intervalNS;
+    uint64_t calls;
+    uint64_t triangleCount;
+    uint64_t clipPixels;
+    uint64_t maxClipPixels;
+    uint64_t maxTargetPixels;
+    uint64_t fullSurfaceCalls;
+    uint64_t target1920x1080Calls;
+    uint64_t targetReadbackBytes;
+    uint64_t sourceReadbackBytes;
+    uint64_t referenceReadbackBytes;
+    uint64_t cpuTimeNS;
+    uint64_t maxCpuTimeNS;
+    uint64_t softwareTimeNS;
+    uint64_t maxSoftwareTimeNS;
+    uint64_t count2Calls;
+    uint64_t singleInputCalls;
+    uint64_t referenceCalls;
+    uint64_t sourceTargetAliasCalls;
+    char methods[768];
+    char targetSizes[768];
+    char sources[256];
+    char stretchModes[768];
+} MikageKRKRLayerTriangleProfile;
+bool MikageKRKRTakeLayerTriangleProfile(MikageKRKRLayerTriangleProfile *profile);
 bool MikageKRKRIsRunning(void);
 const char *MikageKRKRLastError(void);
 void *MikageKRKRNativeWindow(void);

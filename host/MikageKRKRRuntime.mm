@@ -74,6 +74,7 @@ extern "C" void MikageKRKRSetLogCallback(MikageKRKRLogCallback callback)
     diagnosticCallback.store(callback, std::memory_order_release);
     SDL_SetHint("MIKAGE_METAL_DIAGNOSTICS", callback ? "1" : "0");
     krkrsdl3::point_trace::SetEnabled(callback != nullptr);
+    TVPSetMetalLayerTriangleDiagnostics(callback != nullptr);
     SDL_LogOutputFunction current = nullptr;
     void *context = nullptr;
     SDL_GetLogOutputFunction(&current, &context);
@@ -844,6 +845,43 @@ extern "C" bool MikageKRKRGetStats(MikageKRKRStats *stats)
     }
     std::strncpy(stats->renderer, activeRenderer.c_str(), sizeof(stats->renderer) - 1);
     return true;
+}
+
+extern "C" bool MikageKRKRTakeLayerTriangleProfile(MikageKRKRLayerTriangleProfile *profile)
+{
+    if (!running || !profile || !diagnosticCallback.load(std::memory_order_acquire))
+        return false;
+    std::memset(profile, 0, sizeof(*profile));
+    try {
+        const auto sample = TVPTakeMetalLayerTriangleProfile();
+        const auto& s = sample.stats;
+        profile->intervalNS = s.intervalNS;
+        profile->calls = s.calls;
+        profile->triangleCount = s.triangleCount;
+        profile->clipPixels = s.clipPixels;
+        profile->maxClipPixels = s.maxClipPixels;
+        profile->maxTargetPixels = s.maxTargetPixels;
+        profile->fullSurfaceCalls = s.fullSurfaceCalls;
+        profile->target1920x1080Calls = s.target1920x1080Calls;
+        profile->targetReadbackBytes = s.targetReadbackBytes;
+        profile->sourceReadbackBytes = s.sourceReadbackBytes;
+        profile->referenceReadbackBytes = s.referenceReadbackBytes;
+        profile->cpuTimeNS = s.cpuTimeNS;
+        profile->maxCpuTimeNS = s.maxCpuTimeNS;
+        profile->softwareTimeNS = s.softwareTimeNS;
+        profile->maxSoftwareTimeNS = s.maxSoftwareTimeNS;
+        profile->count2Calls = s.count2Calls;
+        profile->singleInputCalls = s.singleInputCalls;
+        profile->referenceCalls = s.referenceCalls;
+        profile->sourceTargetAliasCalls = s.sourceTargetAliasCalls;
+        std::strncpy(profile->methods, sample.methods.c_str(), sizeof(profile->methods) - 1);
+        std::strncpy(profile->targetSizes, sample.targetSizes.c_str(), sizeof(profile->targetSizes) - 1);
+        std::strncpy(profile->sources, sample.sources.c_str(), sizeof(profile->sources) - 1);
+        std::strncpy(profile->stretchModes, sample.stretchModes.c_str(), sizeof(profile->stretchModes) - 1);
+        return true;
+    } catch (...) {
+        return false;
+    }
 }
 
 extern "C" bool MikageKRKRIsRunning(void)
