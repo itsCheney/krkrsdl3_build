@@ -12,6 +12,8 @@
 #include <cstring>
 #include <vector>
 #include <atomic>
+#include <algorithm>
+#include <array>
 #include <mutex>
 #include <cstdio>
 #include <cstdlib>
@@ -20,6 +22,8 @@
 #include "WindowManager.h"
 #include "MetalLayerRenderManager.h"
 #include "PointReadTrace.h"
+#include "LayerManager.h"
+#include "../cpp/plugins/emoteplayer/emoteperformance.h"
 
 namespace {
 std::atomic<MikageKRKRLogCallback> diagnosticCallback{nullptr};
@@ -27,6 +31,7 @@ std::mutex logOutputMutex;
 std::mutex skippedMoviesMutex;
 std::string skippedMovies;
 std::atomic<bool> experimentalEmote{false};
+std::atomic<uint32_t> emotePerformanceOptions{0};
 thread_local bool mirroringKRKRLog = false;
 SDL_LogOutputFunction previousLogOutput = nullptr;
 void *previousLogContext = nullptr;
@@ -103,6 +108,10 @@ extern "C" void MikageKRKRSetExperimentalEmote(bool enabled)
 {
     experimentalEmote.store(enabled, std::memory_order_relaxed);
 }
+extern "C" void MikageKRKRSetEmotePerformanceOptions(uint32_t flags)
+{
+    emotePerformanceOptions.store(flags & 127u, std::memory_order_relaxed);
+}
 
 static bool applyEmoteAnimationModeForStart()
 {
@@ -110,7 +119,40 @@ static bool applyEmoteAnimationModeForStart()
     if (!SDL_SetHintWithPriority("MIKAGE_EMOTE_ANIMATION_MODE",
         enabled ? "integrated" : "legacy", SDL_HINT_OVERRIDE)) return false;
     MikageKRKRLogMessage("emote", 3, enabled ? "animation.integrated" : "animation.legacy");
+    const char* hints[] = {"MIKAGE_EMOTE_NODE_CACHE", "MIKAGE_EMOTE_CAPTURE_CACHE",
+        "MIKAGE_EMOTE_LOCAL_UPDATE", "MIKAGE_EMOTE_REGION_COPY", "MIKAGE_EMOTE_ASYNC_ALPHA",
+        "MIKAGE_EMOTE_EXPERIMENTAL_BOUNDS", "MIKAGE_EMOTE_LOCAL_POSE_CACHE"};
+    const uint32_t flags = emotePerformanceOptions.load(std::memory_order_relaxed);
+    for (unsigned i = 0; i < 7; ++i)
+        if (!SDL_SetHintWithPriority(hints[i], flags & (1u << i) ? "1" : "0", SDL_HINT_OVERRIDE))
+            return false;
+    emoteplayer::resetPerformanceStats();
+    char optionsLog[64];
+    std::snprintf(optionsLog, sizeof(optionsLog), "performance.options flags=%u", flags);
+    MikageKRKRLogMessage("emote", 3, optionsLog);
     return true;
+}
+
+// Leave pointer events in SDL's queue when the alpha-input queue is full.
+// Lifecycle/keyboard/device events remain serviceable, so a blocked GPU cannot
+// prevent quitting, resizing or stopping the session. Pointer FIFO is retained.
+static bool pollKRKREvent(SDL_Event* event)
+{
+    if (!TVPHasPendingLayerPointerBackpressure()) return SDL_PollEvent(event);
+    SDL_PumpEvents();
+    static const std::array<Uint32, 7> pointerTypes = [] {
+        std::array<Uint32, 7> types{{SDL_EVENT_MOUSE_MOTION, SDL_EVENT_MOUSE_BUTTON_DOWN,
+            SDL_EVENT_MOUSE_BUTTON_UP, SDL_EVENT_MOUSE_WHEEL, SDL_EVENT_FINGER_DOWN,
+            SDL_EVENT_FINGER_UP, SDL_EVENT_FINGER_MOTION}};
+        std::sort(types.begin(), types.end());
+        return types;
+    }();
+    Uint32 first = SDL_EVENT_FIRST;
+    for (Uint32 type : pointerTypes) {
+        if (first < type && SDL_PeepEvents(event, 1, SDL_GETEVENT, first, type - 1) > 0) return true;
+        first = type + 1;
+    }
+    return SDL_PeepEvents(event, 1, SDL_GETEVENT, first, SDL_EVENT_LAST) > 0;
 }
 
 #include "TVPApplication.h"
@@ -546,13 +588,13 @@ extern "C" MikageKRKRStepResult MikageKRKRStep(void)
         const Uint64 eventsStarted = frameStarted;
         Uint64 eventCount = 0;
         SDL_Event event;
-        while (SDL_PollEvent(&event)) {
+        while (pollKRKREvent(&event)) {
             ++eventCount;
             SDL_AppResult result = SDL_AppEvent(appState, &event);
             if (result != SDL_APP_CONTINUE)
                 return finishForResult(result);
         }
-        const Uint64 eventDuration = SDL_GetTicksNS() - eventsStarted;
+        Uint64 eventDuration = SDL_GetTicksNS() - eventsStarted;
         stepEventTimeNS += eventDuration;
 
         if (stopRequested)
@@ -560,6 +602,14 @@ extern "C" MikageKRKRStepResult MikageKRKRStep(void)
 
         if (!foreground)
             return MIKAGE_KRKR_STEP_RUNNING;
+
+        // Completion callbacks publish only data. Input and TJS callbacks stay
+        // on this engine thread, while render/timeline progress remains live.
+        const Uint64 pendingInputStarted = SDL_GetTicksNS();
+        TVPProcessPendingLayerPointerEvents();
+        const Uint64 pendingInputDuration = SDL_GetTicksNS() - pendingInputStarted;
+        eventDuration += pendingInputDuration;
+        stepEventTimeNS += pendingInputDuration;
 
         const Uint64 iterateStarted = SDL_GetTicksNS();
         krkrsdl3::TVPBeginRuntimeStep();
@@ -784,6 +834,38 @@ extern "C" bool MikageKRKRGetStats(MikageKRKRStats *stats)
     stats->emoteCaptureCPUBytes = emoteCapture.cpuBytes;
     stats->emoteCaptureGPUCopies = emoteCapture.gpuCopies;
     stats->emoteCaptureGPUBytes = emoteCapture.gpuBytes;
+    stats->emoteCaptureSkipped = emoteCapture.skipped;
+    stats->emoteCaptureRegionPixels = emoteCapture.regionPixels;
+    stats->emoteCaptureFullPixels = emoteCapture.fullPixels;
+    const auto emotePerf = emoteplayer::performanceStats();
+    stats->emoteNodeCacheHits = emotePerf.nodeCacheHits;
+    stats->emoteNodeCacheMisses = emotePerf.nodeCacheMisses;
+    stats->emoteShapeCacheHits = emotePerf.shapeCacheHits;
+    stats->emoteMeshCacheHits = emotePerf.meshCacheHits;
+    stats->emoteDrawListRebuilds = emotePerf.drawListRebuilds;
+    stats->emoteCaptureKnownBounds = emotePerf.captureKnownBounds;
+    stats->emoteCaptureUnknownBounds = emotePerf.captureUnknownBounds;
+    stats->emoteCaptureCOWFallbacks = emotePerf.captureCOWFallbacks;
+    stats->emoteAlphaRequests = emotePerf.alphaRequests;
+    stats->emoteAlphaCacheHits = emotePerf.alphaCacheHits;
+    stats->emoteAlphaPendingEvents = emotePerf.alphaPendingEvents;
+    stats->emoteAlphaReadBytes = emotePerf.alphaReadBytes;
+    stats->emoteAlphaFailures = emotePerf.alphaFailures;
+    stats->emoteUISyncReads = emotePerf.uiSyncReads;
+    stats->emoteUISyncWaitNS = emotePerf.uiSyncWaitNS;
+    stats->emoteCaptureExperimentalBoundsKnown = emotePerf.captureExperimentalBoundsKnown;
+    stats->emoteCaptureExperimentalBoundsUnknown = emotePerf.captureExperimentalBoundsUnknown;
+    stats->emoteCaptureExperimentalBoundsPixels = emotePerf.captureExperimentalBoundsPixels;
+    stats->emoteCaptureExperimentalBoundsNS = emotePerf.captureExperimentalBoundsNS;
+    stats->emoteCaptureUpdatePixels = emotePerf.captureUpdatePixels;
+    stats->emoteCaptureUpdateFullPixels = emotePerf.captureUpdateFullPixels;
+    stats->emoteLocalPoseCacheHits = emotePerf.localPoseCacheHits;
+    stats->emoteLocalPoseCacheMisses = emotePerf.localPoseCacheMisses;
+    stats->emoteCaptureRequests = emotePerf.captureRequests;
+    stats->emoteCaptureFullCopies = emotePerf.captureFullCopies;
+    stats->emoteCaptureRegionCopies = emotePerf.captureRegionCopies;
+    stats->emoteCaptureRegionFallbacks = emotePerf.captureRegionFallbacks;
+    stats->emoteCaptureBoundsNS = emotePerf.captureBoundsNS;
 
     const auto profile = krkrsdl3::TVPGetRuntimeProfileStats();
     stats->emoteProgressCalls = profile.emoteProgressCalls;

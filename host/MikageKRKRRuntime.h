@@ -34,6 +34,10 @@ void MikageKRKRSetSkippedMovies(const char *newlineSeparatedNames);
 // current session or its existing/new Emote players. Default is legacy (false).
 // The host's explicit choice overrides an environment or prior SDL hint.
 void MikageKRKRSetExperimentalEmote(bool enabled);
+// Next-start A/B options, default 0. Bits: node cache, capture cache, local
+// update, region copy, async pointer alpha, experimental deformation bounds,
+// experimental local pose evaluation (requires node cache).
+void MikageKRKRSetEmotePerformanceOptions(uint32_t flags);
 
 typedef struct MikageKRKRStats {
     double framesPerSecond;
@@ -187,6 +191,37 @@ typedef struct MikageKRKRStats {
     uint64_t emoteLayerCPUReadbacks;
     uint64_t emoteLayerCPUReadbackBytes;
     uint64_t emoteLayerCPUReadbackTimeNS;
+    uint64_t emoteCaptureSkipped;
+    uint64_t emoteCaptureRegionPixels;
+    uint64_t emoteCaptureFullPixels;
+    uint64_t emoteNodeCacheHits;
+    uint64_t emoteNodeCacheMisses;
+    uint64_t emoteShapeCacheHits;
+    uint64_t emoteMeshCacheHits;
+    uint64_t emoteDrawListRebuilds;
+    uint64_t emoteCaptureKnownBounds;
+    uint64_t emoteCaptureUnknownBounds;
+    uint64_t emoteCaptureCOWFallbacks;
+    uint64_t emoteAlphaRequests;
+    uint64_t emoteAlphaCacheHits;
+    uint64_t emoteAlphaPendingEvents;
+    uint64_t emoteAlphaReadBytes;
+    uint64_t emoteAlphaFailures;
+    uint64_t emoteUISyncReads;
+    uint64_t emoteUISyncWaitNS;
+    uint64_t emoteCaptureExperimentalBoundsKnown;
+    uint64_t emoteCaptureExperimentalBoundsUnknown;
+    uint64_t emoteCaptureExperimentalBoundsPixels;
+    uint64_t emoteCaptureExperimentalBoundsNS;
+    uint64_t emoteCaptureUpdatePixels;
+    uint64_t emoteCaptureUpdateFullPixels;
+    uint64_t emoteLocalPoseCacheHits;
+    uint64_t emoteLocalPoseCacheMisses;
+    uint64_t emoteCaptureRequests;
+    uint64_t emoteCaptureFullCopies;
+    uint64_t emoteCaptureRegionCopies;
+    uint64_t emoteCaptureRegionFallbacks;
+    uint64_t emoteCaptureBoundsNS;
 } MikageKRKRStats;
 
 bool MikageKRKRStart(const char *gamePath,
