@@ -274,7 +274,7 @@ bool MikageKRKRTakeLayerTriangleProfile(MikageKRKRLayerTriangleProfile *profile)
 // Opt-in, bounded interval diagnostics. Inclusive stage times must not be added.
 typedef struct MikageKRKRLayerWorkProfile {
     uint64_t intervalNS;
-    char stages[512];
+    char stages[1024];
     char transfers[2048];
     uint64_t amvDecodedFrames;
     uint64_t amvDecodedBytes;
