@@ -2,6 +2,7 @@
 
 #import <Foundation/Foundation.h>
 #import <AVFAudio/AVFAudio.h>
+#include <TargetConditionals.h>
 
 #include <SDL3/SDL.h>
 #define SDL_MAIN_HANDLED
@@ -122,7 +123,12 @@ static bool applyEmoteAnimationModeForStart()
     const char* hints[] = {"MIKAGE_EMOTE_NODE_CACHE", "MIKAGE_EMOTE_CAPTURE_CACHE",
         "MIKAGE_EMOTE_LOCAL_UPDATE", "MIKAGE_EMOTE_REGION_COPY", "MIKAGE_EMOTE_ASYNC_ALPHA",
         "MIKAGE_EMOTE_EXPERIMENTAL_BOUNDS", "MIKAGE_EMOTE_LOCAL_POSE_CACHE"};
-    const uint32_t flags = emotePerformanceOptions.load(std::memory_order_relaxed);
+    uint32_t flags = emotePerformanceOptions.load(std::memory_order_relaxed);
+#if TARGET_OS_SIMULATOR
+    // No drawable-presented acknowledgement exists in the simulator SDK.
+    // Keep ordinary input rather than publish an unconfirmed alpha frame.
+    flags &= ~(1u << 4);
+#endif
     for (unsigned i = 0; i < 7; ++i)
         if (!SDL_SetHintWithPriority(hints[i], flags & (1u << i) ? "1" : "0", SDL_HINT_OVERRIDE))
             return false;
