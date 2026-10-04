@@ -271,6 +271,15 @@ typedef struct MikageKRKRLayerTriangleProfile {
     char stretchModes[768];
 } MikageKRKRLayerTriangleProfile;
 bool MikageKRKRTakeLayerTriangleProfile(MikageKRKRLayerTriangleProfile *profile);
+// Opt-in, bounded interval diagnostics. Inclusive stage times must not be added.
+typedef struct MikageKRKRLayerWorkProfile {
+    uint64_t intervalNS;
+    char stages[512];
+    char transfers[2048];
+    uint64_t amvDecodedFrames;
+    uint64_t amvDecodedBytes;
+} MikageKRKRLayerWorkProfile;
+bool MikageKRKRTakeLayerWorkProfile(MikageKRKRLayerWorkProfile *profile);
 bool MikageKRKRIsRunning(void);
 const char *MikageKRKRLastError(void);
 void *MikageKRKRNativeWindow(void);

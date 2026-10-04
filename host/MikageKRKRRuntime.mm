@@ -83,6 +83,7 @@ extern "C" void MikageKRKRSetLogCallback(MikageKRKRLogCallback callback)
     SDL_SetHint("MIKAGE_METAL_DIAGNOSTICS", callback ? "1" : "0");
     krkrsdl3::point_trace::SetEnabled(callback != nullptr);
     TVPSetMetalLayerTriangleDiagnostics(callback != nullptr);
+    krkrsdl3::layer_work::SetEnabled(callback != nullptr);
     SDL_LogOutputFunction current = nullptr;
     void *context = nullptr;
     SDL_GetLogOutputFunction(&current, &context);
@@ -951,6 +952,21 @@ extern "C" bool MikageKRKRGetStats(MikageKRKRStats *stats)
     }
     std::strncpy(stats->renderer, activeRenderer.c_str(), sizeof(stats->renderer) - 1);
     return true;
+}
+
+extern "C" bool MikageKRKRTakeLayerWorkProfile(MikageKRKRLayerWorkProfile *profile)
+{
+    if(!running || !profile || !diagnosticCallback.load(std::memory_order_acquire)) return false;
+    std::memset(profile,0,sizeof(*profile));
+    try {
+        const auto sample=krkrsdl3::layer_work::Take();
+        profile->intervalNS=sample.intervalNS;
+        std::snprintf(profile->stages,sizeof(profile->stages),"%s",sample.stages.c_str());
+        std::snprintf(profile->transfers,sizeof(profile->transfers),"%s",sample.transfers.c_str());
+        profile->amvDecodedFrames=sample.decodedFrames;
+        profile->amvDecodedBytes=sample.decodedBytes;
+        return true;
+    } catch(...) { return false; }
 }
 
 extern "C" bool MikageKRKRTakeLayerTriangleProfile(MikageKRKRLayerTriangleProfile *profile)
