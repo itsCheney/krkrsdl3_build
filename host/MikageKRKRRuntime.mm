@@ -746,6 +746,8 @@ extern "C" bool MikageKRKRGetStats(MikageKRKRStats *stats)
     stats->gpuLayerOperations = layers.gpuOperations;
     stats->layerCPUFallbacks = layers.cpuFallbacks;
     stats->layerUploadedBytes = layers.uploadedBytes;
+    stats->layerGammaLUTUploads = layers.gammaLUTUploads;
+    stats->layerGammaLUTUploadedBytes = layers.gammaLUTUploadedBytes;
     stats->layerReadbackBytes = layers.readbackBytes;
     stats->layerGPUResidentBytes = layers.gpuResidentBytes;
     stats->layerCPUCacheBytes = layers.cpuCacheBytes;

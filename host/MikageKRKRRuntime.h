@@ -222,6 +222,9 @@ typedef struct MikageKRKRStats {
     uint64_t emoteCaptureRegionCopies;
     uint64_t emoteCaptureRegionFallbacks;
     uint64_t emoteCaptureBoundsNS;
+    // Parameter resource bytes are separate from Layer image uploads.
+    uint64_t layerGammaLUTUploads;
+    uint64_t layerGammaLUTUploadedBytes;
 } MikageKRKRStats;
 
 bool MikageKRKRStart(const char *gamePath,
