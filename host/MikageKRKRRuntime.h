@@ -228,6 +228,7 @@ typedef struct MikageKRKRStats {
     uint64_t layerPsTableUploads;
     uint64_t layerPsTableUploadedBytes;
     uint64_t layerGPURejectPsTables;
+    uint64_t layerGPURejectAffineAlias;
 } MikageKRKRStats;
 
 bool MikageKRKRStart(const char *gamePath,
