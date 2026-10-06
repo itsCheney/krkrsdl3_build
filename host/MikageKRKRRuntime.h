@@ -225,6 +225,9 @@ typedef struct MikageKRKRStats {
     // Parameter resource bytes are separate from Layer image uploads.
     uint64_t layerGammaLUTUploads;
     uint64_t layerGammaLUTUploadedBytes;
+    uint64_t layerPsTableUploads;
+    uint64_t layerPsTableUploadedBytes;
+    uint64_t layerGPURejectPsTables;
 } MikageKRKRStats;
 
 bool MikageKRKRStart(const char *gamePath,

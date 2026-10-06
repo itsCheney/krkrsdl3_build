@@ -748,6 +748,8 @@ extern "C" bool MikageKRKRGetStats(MikageKRKRStats *stats)
     stats->layerUploadedBytes = layers.uploadedBytes;
     stats->layerGammaLUTUploads = layers.gammaLUTUploads;
     stats->layerGammaLUTUploadedBytes = layers.gammaLUTUploadedBytes;
+    stats->layerPsTableUploads = layers.psTableUploads;
+    stats->layerPsTableUploadedBytes = layers.psTableUploadedBytes;
     stats->layerReadbackBytes = layers.readbackBytes;
     stats->layerGPUResidentBytes = layers.gpuResidentBytes;
     stats->layerCPUCacheBytes = layers.cpuCacheBytes;
@@ -823,6 +825,8 @@ extern "C" bool MikageKRKRGetStats(MikageKRKRStats *stats)
         layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::UnsupportedKind)];
     stats->layerGPURejectAlphaTables =
         layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::AlphaTables)];
+    stats->layerGPURejectPsTables =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::PsTables)];
     stats->layerGPURejectBackendFailure =
         layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::BackendFailure)];
     stats->layerGPURejectTriangles =
