@@ -829,6 +829,8 @@ extern "C" bool MikageKRKRGetStats(MikageKRKRStats *stats)
         layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::PsTables)];
     stats->layerGPURejectAffineAlias =
         layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::AffineAlias)];
+    stats->layerGPURejectPerspectiveAlias =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::PerspectiveAlias)];
     stats->layerGPURejectBackendFailure =
         layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::BackendFailure)];
     stats->layerGPURejectTriangles =
