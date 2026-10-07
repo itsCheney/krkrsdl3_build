@@ -286,6 +286,13 @@ typedef struct MikageKRKRLayerWorkProfile {
     char transfers[2048];
     uint64_t amvDecodedFrames;
     uint64_t amvDecodedBytes;
+    uint32_t workProfileVersion;
+    char transferOrigins[16384];
+    char originOverflow[512];
+    uint32_t frameSampleCount;
+    uint64_t frameIntervalNS[2048];
+    uint64_t frameCpuWallNS[2048];
+    uint64_t frameSamplesDropped;
 } MikageKRKRLayerWorkProfile;
 bool MikageKRKRTakeLayerWorkProfile(MikageKRKRLayerWorkProfile *profile);
 bool MikageKRKRIsRunning(void);

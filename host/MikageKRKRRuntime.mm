@@ -23,6 +23,7 @@
 #include "WindowManager.h"
 #include "MetalLayerRenderManager.h"
 #include "PointReadTrace.h"
+#include "LayerWorkDiagnostics.h"
 #include "LayerManager.h"
 #include "../cpp/plugins/emoteplayer/emoteperformance.h"
 
@@ -309,6 +310,7 @@ Uint64 peakFrameEventCount = 0;
 
 void resetStats()
 {
+    krkrsdl3::layer_work::ResetFrameHistory();
     statsWindowStarted = SDL_GetTicksNS();
     previousFrameAt = 0;
     frameIntervalTotal = 0;
@@ -325,6 +327,7 @@ void resetStats()
 void recordFrame(Uint64 presentedAt, Uint64 workDuration,
                  Uint64 eventDuration, Uint64 iterateDuration, Uint64 eventCount)
 {
+    krkrsdl3::layer_work::RecordFrame(presentedAt,workDuration);
     if (!statsWindowStarted)
         statsWindowStarted = presentedAt;
     if (previousFrameAt)
@@ -971,10 +974,21 @@ extern "C" bool MikageKRKRTakeLayerWorkProfile(MikageKRKRLayerWorkProfile *profi
     try {
         const auto sample=krkrsdl3::layer_work::Take();
         profile->intervalNS=sample.intervalNS;
-        std::snprintf(profile->stages,sizeof(profile->stages),"%s",sample.stages.c_str());
-        std::snprintf(profile->transfers,sizeof(profile->transfers),"%s",sample.transfers.c_str());
+        // Bounds are part of the wire contract. Never emit a silently cut row.
+        if(sample.stages.size()>=sizeof(profile->stages) || sample.transfers.size()>=sizeof(profile->transfers) ||
+           sample.transferOrigins.size()>=sizeof(profile->transferOrigins) || sample.originOverflow.size()>=sizeof(profile->originOverflow) ||
+           sample.frameSampleCount>krkrsdl3::layer_work::MaxFrameSamples) return false;
+        std::memcpy(profile->stages,sample.stages.c_str(),sample.stages.size()+1);
+        std::memcpy(profile->transfers,sample.transfers.c_str(),sample.transfers.size()+1);
         profile->amvDecodedFrames=sample.decodedFrames;
         profile->amvDecodedBytes=sample.decodedBytes;
+        profile->workProfileVersion=sample.workProfileVersion;
+        std::memcpy(profile->transferOrigins,sample.transferOrigins.c_str(),sample.transferOrigins.size()+1);
+        std::memcpy(profile->originOverflow,sample.originOverflow.c_str(),sample.originOverflow.size()+1);
+        profile->frameSampleCount=sample.frameSampleCount;
+        std::copy_n(sample.frameIntervalNS.data(),sample.frameSampleCount,profile->frameIntervalNS);
+        std::copy_n(sample.frameCpuWallNS.data(),sample.frameSampleCount,profile->frameCpuWallNS);
+        profile->frameSamplesDropped=sample.frameSamplesDropped;
         return true;
     } catch(...) { return false; }
 }
