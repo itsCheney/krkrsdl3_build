@@ -977,6 +977,7 @@ extern "C" bool MikageKRKRTakeLayerWorkProfile(MikageKRKRLayerWorkProfile *profi
         // Bounds are part of the wire contract. Never emit a silently cut row.
         if(sample.stages.size()>=sizeof(profile->stages) || sample.transfers.size()>=sizeof(profile->transfers) ||
            sample.transferOrigins.size()>=sizeof(profile->transferOrigins) || sample.originOverflow.size()>=sizeof(profile->originOverflow) ||
+           sample.transitionProfiles.size()>=sizeof(profile->transitionProfiles) || sample.transitionOverflow.size()>=sizeof(profile->transitionOverflow) ||
            sample.frameSampleCount>krkrsdl3::layer_work::MaxFrameSamples) return false;
         std::memcpy(profile->stages,sample.stages.c_str(),sample.stages.size()+1);
         std::memcpy(profile->transfers,sample.transfers.c_str(),sample.transfers.size()+1);
@@ -989,6 +990,10 @@ extern "C" bool MikageKRKRTakeLayerWorkProfile(MikageKRKRLayerWorkProfile *profi
         std::copy_n(sample.frameIntervalNS.data(),sample.frameSampleCount,profile->frameIntervalNS);
         std::copy_n(sample.frameCpuWallNS.data(),sample.frameSampleCount,profile->frameCpuWallNS);
         profile->frameSamplesDropped=sample.frameSamplesDropped;
+        profile->transitionProfileVersion=sample.transitionProfileVersion;
+        std::memcpy(profile->transitionProfiles,sample.transitionProfiles.c_str(),sample.transitionProfiles.size()+1);
+        profile->transitionProfilesDropped=sample.transitionProfilesDropped;
+        std::memcpy(profile->transitionOverflow,sample.transitionOverflow.c_str(),sample.transitionOverflow.size()+1);
         return true;
     } catch(...) { return false; }
 }
@@ -996,6 +1001,16 @@ extern "C" bool MikageKRKRTakeLayerWorkProfile(MikageKRKRLayerWorkProfile *profi
 extern "C" const char *MikageKRKRLayerWorkProfileOrigins(const MikageKRKRLayerWorkProfile *profile)
 {
     return profile ? profile->transferOrigins : nullptr;
+}
+
+extern "C" const char *MikageKRKRLayerWorkProfileTransitions(const MikageKRKRLayerWorkProfile *profile)
+{
+    return profile && profile->transitionProfileVersion==1 ? profile->transitionProfiles : nullptr;
+}
+
+extern "C" const char *MikageKRKRLayerWorkProfileTransitionOverflow(const MikageKRKRLayerWorkProfile *profile)
+{
+    return profile && profile->transitionProfileVersion==1 ? profile->transitionOverflow : nullptr;
 }
 
 extern "C" const uint64_t *MikageKRKRLayerWorkProfileFrameIntervals(const MikageKRKRLayerWorkProfile *profile)
