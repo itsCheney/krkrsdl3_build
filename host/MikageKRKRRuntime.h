@@ -295,6 +295,12 @@ typedef struct MikageKRKRLayerWorkProfile {
     uint64_t frameSamplesDropped;
 } MikageKRKRLayerWorkProfile;
 bool MikageKRKRTakeLayerWorkProfile(MikageKRKRLayerWorkProfile *profile);
+// Borrowed read-only views of the caller-owned sample. Swift cannot import
+// every large inline C array; copy these views while profile remains in scope.
+// These accessors do not sample/reset diagnostics or perform GPU work.
+const char *MikageKRKRLayerWorkProfileOrigins(const MikageKRKRLayerWorkProfile *profile);
+const uint64_t *MikageKRKRLayerWorkProfileFrameIntervals(const MikageKRKRLayerWorkProfile *profile);
+const uint64_t *MikageKRKRLayerWorkProfileFrameCpuWall(const MikageKRKRLayerWorkProfile *profile);
 bool MikageKRKRIsRunning(void);
 const char *MikageKRKRLastError(void);
 void *MikageKRKRNativeWindow(void);

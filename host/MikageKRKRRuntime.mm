@@ -993,6 +993,21 @@ extern "C" bool MikageKRKRTakeLayerWorkProfile(MikageKRKRLayerWorkProfile *profi
     } catch(...) { return false; }
 }
 
+extern "C" const char *MikageKRKRLayerWorkProfileOrigins(const MikageKRKRLayerWorkProfile *profile)
+{
+    return profile ? profile->transferOrigins : nullptr;
+}
+
+extern "C" const uint64_t *MikageKRKRLayerWorkProfileFrameIntervals(const MikageKRKRLayerWorkProfile *profile)
+{
+    return profile && profile->frameSampleCount <= krkrsdl3::layer_work::MaxFrameSamples ? profile->frameIntervalNS : nullptr;
+}
+
+extern "C" const uint64_t *MikageKRKRLayerWorkProfileFrameCpuWall(const MikageKRKRLayerWorkProfile *profile)
+{
+    return profile && profile->frameSampleCount <= krkrsdl3::layer_work::MaxFrameSamples ? profile->frameCpuWallNS : nullptr;
+}
+
 extern "C" bool MikageKRKRTakeLayerTriangleProfile(MikageKRKRLayerTriangleProfile *profile)
 {
     if (!running || !profile || !diagnosticCallback.load(std::memory_order_acquire))
