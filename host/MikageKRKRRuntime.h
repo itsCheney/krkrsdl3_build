@@ -297,6 +297,14 @@ typedef struct MikageKRKRLayerWorkProfile {
     char transitionProfiles[131072];
     uint64_t transitionProfilesDropped;
     char transitionOverflow[1024];
+    // C1 append-only tail. Host and App must rebuild together.
+    uint32_t shrinkProfileVersion;
+    char shrinkProfiles[65536];
+    uint64_t shrinkProfilesDropped;
+    char shrinkOverflow[1024];
+    uint32_t shrinkReadWaitSampleCount;
+    uint64_t shrinkReadWaitSamplesNS[2048];
+    uint64_t shrinkReadWaitSamplesDropped;
 } MikageKRKRLayerWorkProfile;
 bool MikageKRKRTakeLayerWorkProfile(MikageKRKRLayerWorkProfile *profile);
 // Borrowed read-only views of the caller-owned sample. Swift cannot import
@@ -307,6 +315,9 @@ const char *MikageKRKRLayerWorkProfileTransitions(const MikageKRKRLayerWorkProfi
 const char *MikageKRKRLayerWorkProfileTransitionOverflow(const MikageKRKRLayerWorkProfile *profile);
 const uint64_t *MikageKRKRLayerWorkProfileFrameIntervals(const MikageKRKRLayerWorkProfile *profile);
 const uint64_t *MikageKRKRLayerWorkProfileFrameCpuWall(const MikageKRKRLayerWorkProfile *profile);
+const char *MikageKRKRLayerWorkProfileShrinks(const MikageKRKRLayerWorkProfile *profile);
+const char *MikageKRKRLayerWorkProfileShrinkOverflow(const MikageKRKRLayerWorkProfile *profile);
+const uint64_t *MikageKRKRLayerWorkProfileShrinkReadWait(const MikageKRKRLayerWorkProfile *profile);
 bool MikageKRKRIsRunning(void);
 const char *MikageKRKRLastError(void);
 void *MikageKRKRNativeWindow(void);
