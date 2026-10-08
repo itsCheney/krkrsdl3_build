@@ -1,0 +1,534 @@
+--- a/include/plutovg.h
++++ b/include/plutovg.h
+@@ -24,6 +24,7 @@
+ #define PLUTOVG_H
+ 
+ #include <stdbool.h>
++#include <stdint.h>
+ 
+ #ifdef __cplusplus
+ extern "C" {
+@@ -1499,6 +1500,21 @@
+  */
+ PLUTOVG_API plutovg_canvas_t* plutovg_canvas_create(plutovg_surface_t* surface);
+ 
++/* Optional KRKR span capture extension, ABI revision 1. Disabled by default.
++ * A callback must copy borrowed source pixels before returning. False aborts
++ * subsequent emission. A capture canvas NEVER accesses destination pixels. */
++#define PLUTOVG_SPAN_CAPTURE_VERSION 1
++typedef enum { PLUTOVG_SPAN_SOLID_SOURCE=1, PLUTOVG_SPAN_SOLID_SOURCE_OVER=2,
++    PLUTOVG_SPAN_ARRAY_SOURCE_OVER=3 } plutovg_span_kind_t;
++typedef bool (*plutovg_span_capture_func_t)(void* closure, plutovg_span_kind_t kind,
++    int x, int y, int length, int coverage, uint32_t solid, const uint32_t* source);
++PLUTOVG_API plutovg_canvas_t* plutovg_canvas_clone_for_surface(const plutovg_canvas_t* source, plutovg_surface_t* surface);
++PLUTOVG_API void plutovg_canvas_set_span_capture(plutovg_canvas_t* canvas, plutovg_span_capture_func_t callback, void* closure);
++PLUTOVG_API bool plutovg_canvas_span_capture_failed(const plutovg_canvas_t* canvas);
++PLUTOVG_API bool plutovg_canvas_rebind_surface(plutovg_canvas_t* canvas, plutovg_surface_t* surface);
++PLUTOVG_API bool plutovg_surface_is_owned(const plutovg_surface_t* surface);
++
++
+ /**
+  * @brief Increases the reference count of the canvas.
+  *
+--- a/source/plutovg-private.h
++++ b/source/plutovg-private.h
+@@ -42,6 +42,7 @@
+     int height;
+     int stride;
+     unsigned char* data;
++    bool owns_data;
+ };
+ 
+ struct plutovg_path {
+@@ -162,6 +163,9 @@
+     plutovg_rect_t clip_rect;
+     plutovg_span_buffer_t clip_spans;
+     plutovg_span_buffer_t fill_spans;
++    plutovg_span_capture_func_t span_capture;
++    void* span_closure;
++    bool span_failed;
+ };
+ 
+ void plutovg_span_buffer_init(plutovg_span_buffer_t* span_buffer);
+--- a/source/plutovg-surface.c
++++ b/source/plutovg-surface.c
+@@ -23,6 +23,7 @@
+     surface->height = height;
+     surface->stride = width * 4;
+     surface->data = (uint8_t*)(surface + 1);
++    surface->owns_data = true;
+     return surface;
+ }
+ 
+@@ -37,11 +38,13 @@
+ plutovg_surface_t* plutovg_surface_create_for_data(unsigned char* data, int width, int height, int stride)
+ {
+     plutovg_surface_t* surface = malloc(sizeof(plutovg_surface_t));
++    if(surface == NULL) return NULL;
+     plutovg_init_reference(surface);
+     surface->width = width;
+     surface->height = height;
+     surface->stride = stride;
+     surface->data = data;
++    surface->owns_data = false;
+     return surface;
+ }
+ 
+@@ -293,3 +296,5 @@
+         }
+     }
+ }
++
++bool plutovg_surface_is_owned(const plutovg_surface_t* surface) { return surface && surface->owns_data; }
+--- a/source/plutovg-canvas.c
++++ b/source/plutovg-canvas.c
+@@ -16,6 +16,7 @@
+ static plutovg_state_t* plutovg_state_create(void)
+ {
+     plutovg_state_t* state = malloc(sizeof(plutovg_state_t));
++    if(!state) return NULL;
+     state->paint = NULL;
+     state->font_face = NULL;
+     state->color = PLUTOVG_BLACK_COLOR;
+@@ -82,12 +83,15 @@
+ plutovg_canvas_t* plutovg_canvas_create(plutovg_surface_t* surface)
+ {
+     plutovg_canvas_t* canvas = malloc(sizeof(plutovg_canvas_t));
++    if(!canvas || !surface) { free(canvas); return NULL; }
+     plutovg_init_reference(canvas);
+     canvas->surface = plutovg_surface_reference(surface);
+     canvas->path = plutovg_path_create();
+     canvas->state = plutovg_state_create();
++    if(!canvas->state || !canvas->path) { plutovg_surface_destroy(canvas->surface); plutovg_path_destroy(canvas->path); free(canvas); return NULL; }
+     canvas->freed_state = NULL;
+     canvas->face_cache = NULL;
++    canvas->span_capture = NULL; canvas->span_closure = NULL; canvas->span_failed = false;
+     canvas->clip_rect = PLUTOVG_MAKE_RECT(0, 0, surface->width, surface->height);
+     plutovg_span_buffer_init(&canvas->clip_spans);
+     plutovg_span_buffer_init(&canvas->fill_spans);
+@@ -757,3 +761,59 @@
+ 
+     return 0.f;
+ }
++
++/* Deep-copy the logical clip/state; a targetless surface is metadata only. */
++static bool span_copy_state(plutovg_state_t* target, const plutovg_state_t* source)
++{
++    *target = *source;
++    target->next = NULL;
++    target->paint = plutovg_paint_reference(source->paint);
++    target->font_face = plutovg_font_face_reference(source->font_face);
++    target->stroke.dash.array.data = NULL;
++    target->stroke.dash.array.size = target->stroke.dash.array.capacity = 0;
++    target->clip_spans.spans.data = NULL;
++    target->clip_spans.spans.size = target->clip_spans.spans.capacity = 0;
++    int n = source->stroke.dash.array.size;
++    if(n) {
++        target->stroke.dash.array.data = malloc((size_t)n * sizeof(float));
++        if(!target->stroke.dash.array.data) return false;
++        memcpy(target->stroke.dash.array.data, source->stroke.dash.array.data, (size_t)n * sizeof(float));
++        target->stroke.dash.array.size = target->stroke.dash.array.capacity = n;
++    }
++    n = source->clip_spans.spans.size;
++    if(n) {
++        target->clip_spans.spans.data = malloc((size_t)n * sizeof(plutovg_span_t));
++        if(!target->clip_spans.spans.data) return false;
++        memcpy(target->clip_spans.spans.data, source->clip_spans.spans.data, (size_t)n * sizeof(plutovg_span_t));
++        target->clip_spans.spans.size = target->clip_spans.spans.capacity = n;
++    }
++    return true;
++}
++plutovg_canvas_t* plutovg_canvas_clone_for_surface(const plutovg_canvas_t* source, plutovg_surface_t* surface)
++{
++    if(!source || !surface || source->surface->width != surface->width || source->surface->height != surface->height) return NULL;
++    plutovg_canvas_t* clone = plutovg_canvas_create(surface);
++    if(!clone) return NULL;
++    plutovg_state_destroy(clone->state); clone->state = NULL;
++    plutovg_state_t** tail = &clone->state;
++    for(const plutovg_state_t* s = source->state; s; s = s->next) {
++        plutovg_state_t* t = malloc(sizeof(plutovg_state_t));
++        if(!t) { plutovg_canvas_destroy(clone); return NULL; }
++        *tail = t;
++        if(!span_copy_state(t,s)) { plutovg_canvas_destroy(clone); return NULL; }
++        tail = &t->next;
++    }
++    clone->clip_rect = source->clip_rect;
++    return clone;
++}
++bool plutovg_canvas_rebind_surface(plutovg_canvas_t* canvas, plutovg_surface_t* surface)
++{
++    if(!canvas || !surface || canvas->span_capture || canvas->surface->width != surface->width || canvas->surface->height != surface->height) return false;
++    plutovg_surface_reference(surface);
++    plutovg_surface_destroy(canvas->surface);
++    canvas->surface = surface;
++    return true;
++}
++void plutovg_canvas_set_span_capture(plutovg_canvas_t* canvas, plutovg_span_capture_func_t callback, void* closure)
++{ canvas->span_capture = callback; canvas->span_closure = closure; canvas->span_failed = false; }
++bool plutovg_canvas_span_capture_failed(const plutovg_canvas_t* canvas) { return canvas->span_failed; }
+--- a/source/plutovg-blend.c
++++ b/source/plutovg-blend.c
+@@ -8,6 +8,7 @@
+ typedef struct {
+     plutovg_matrix_t matrix;
+     plutovg_spread_method_t spread;
++    bool* capture_failure;
+     uint32_t colortable[COLOR_TABLE_SIZE];
+     union {
+         struct {
+@@ -192,6 +193,9 @@
+ 
+ static inline uint32_t gradient_pixel(const gradient_data_t* gradient, float pos)
+ {
++    if(gradient->capture_failure && (!isfinite(pos) || fabsf(pos * (COLOR_TABLE_SIZE - 1) + 0.5f) > INT_MAX - COLOR_TABLE_SIZE)) {
++        *gradient->capture_failure = true; return 0;
++    }
+     int ipos = (int)(pos * (COLOR_TABLE_SIZE - 1) + 0.5f);
+     return gradient->colortable[gradient_clamp(gradient, ipos)];
+ }
+@@ -212,6 +216,12 @@
+         inc *= (COLOR_TABLE_SIZE - 1);
+     }
+ 
++    if(gradient->capture_failure && (!isfinite(t) || !isfinite(inc) ||
++        fabsf(t * FIXPT_SIZE) > INT_MAX - COLOR_TABLE_SIZE ||
++        fabsf(inc * FIXPT_SIZE) > INT_MAX - COLOR_TABLE_SIZE ||
++        fabsf((t + inc * length) * FIXPT_SIZE) > INT_MAX - COLOR_TABLE_SIZE)) {
++        *gradient->capture_failure = true; plutovg_memfill32(buffer,length,0); return;
++    }
+     const uint32_t* end = buffer + length;
+     if(inc > -1e-5f && inc < 1e-5f) {
+         plutovg_memfill32(buffer, length, gradient_pixel_fixed(gradient, (int)(t * FIXPT_SIZE)));
+@@ -649,21 +659,40 @@
+     composition_xor
+ };
+ 
+-static void blend_solid(plutovg_surface_t* surface, plutovg_operator_t op, uint32_t solid, const plutovg_span_buffer_t* span_buffer)
+-{
++
++static bool span_emit(plutovg_canvas_t* canvas, plutovg_operator_t op, bool solid,
++    int x, int y, int length, int coverage, uint32_t color, const uint32_t* source)
++{
++    if(!canvas->span_capture) return false;
++    if(canvas->span_failed) return true;
++    plutovg_span_kind_t kind;
++    if(solid && op == PLUTOVG_OPERATOR_SRC) kind = PLUTOVG_SPAN_SOLID_SOURCE;
++    else if(solid && op == PLUTOVG_OPERATOR_SRC_OVER) kind = PLUTOVG_SPAN_SOLID_SOURCE_OVER;
++    else if(!solid && op == PLUTOVG_OPERATOR_SRC_OVER) kind = PLUTOVG_SPAN_ARRAY_SOURCE_OVER;
++    else { canvas->span_failed = true; return true; }
++    if(!canvas->span_capture(canvas->span_closure, kind, x,y,length,coverage,color,source)) canvas->span_failed = true;
++    return true;
++}
++static void blend_solid(plutovg_canvas_t* canvas, plutovg_operator_t op, uint32_t solid, const plutovg_span_buffer_t* span_buffer)
++{
++    plutovg_surface_t* surface = canvas->surface;
++    if(canvas->span_capture && canvas->span_failed) return;
+     composition_solid_function_t func = composition_solid_table[op];
+     int count = span_buffer->spans.size;
+     const plutovg_span_t* spans = span_buffer->spans.data;
+     while(count--) {
+-        uint32_t* target = (uint32_t*)(surface->data + spans->y * surface->stride) + spans->x;
+-        func(target, spans->len, solid, spans->coverage);
++        uint32_t* target = canvas->span_capture ? NULL : (uint32_t*)(surface->data + spans->y * surface->stride) + spans->x;
++        if(!span_emit(canvas,op,true,spans->x,spans->y,spans->len,spans->coverage,solid,NULL))
++            func(target, spans->len, solid, spans->coverage);
+         ++spans;
+     }
+ }
+ 
+ #define BUFFER_SIZE 1024
+-static void blend_linear_gradient(plutovg_surface_t* surface, plutovg_operator_t op, const gradient_data_t* gradient, const plutovg_span_buffer_t* span_buffer)
+-{
++static void blend_linear_gradient(plutovg_canvas_t* canvas, plutovg_operator_t op, const gradient_data_t* gradient, const plutovg_span_buffer_t* span_buffer)
++{
++    plutovg_surface_t* surface = canvas->surface;
++    if(canvas->span_capture && canvas->span_failed) return;
+     composition_function_t func = composition_table[op];
+     unsigned int buffer[BUFFER_SIZE];
+ 
+@@ -686,8 +715,9 @@
+         while(length) {
+             int l = plutovg_min(length, BUFFER_SIZE);
+             fetch_linear_gradient(buffer, &v, gradient, spans->y, x, l);
+-            uint32_t* target = (uint32_t*)(surface->data + spans->y * surface->stride) + x;
+-            func(target, l, buffer, spans->coverage);
++            uint32_t* target = canvas->span_capture ? NULL : (uint32_t*)(surface->data + spans->y * surface->stride) + x;
++            if(!span_emit(canvas,op,false,x,spans->y,l,spans->coverage,0,buffer))
++                func(target, l, buffer, spans->coverage);
+             x += l;
+             length -= l;
+         }
+@@ -696,8 +726,10 @@
+     }
+ }
+ 
+-static void blend_radial_gradient(plutovg_surface_t* surface, plutovg_operator_t op, const gradient_data_t* gradient, const plutovg_span_buffer_t* span_buffer)
+-{
++static void blend_radial_gradient(plutovg_canvas_t* canvas, plutovg_operator_t op, const gradient_data_t* gradient, const plutovg_span_buffer_t* span_buffer)
++{
++    plutovg_surface_t* surface = canvas->surface;
++    if(canvas->span_capture && canvas->span_failed) return;
+     composition_function_t func = composition_table[op];
+     unsigned int buffer[BUFFER_SIZE];
+ 
+@@ -717,8 +749,9 @@
+         while(length) {
+             int l = plutovg_min(length, BUFFER_SIZE);
+             fetch_radial_gradient(buffer, &v, gradient, spans->y, x, l);
+-            uint32_t* target = (uint32_t*)(surface->data + spans->y * surface->stride) + x;
+-            func(target, l, buffer, spans->coverage);
++            uint32_t* target = canvas->span_capture ? NULL : (uint32_t*)(surface->data + spans->y * surface->stride) + x;
++            if(!span_emit(canvas,op,false,x,spans->y,l,spans->coverage,0,buffer))
++                func(target, l, buffer, spans->coverage);
+             x += l;
+             length -= l;
+         }
+@@ -727,8 +760,10 @@
+     }
+ }
+ 
+-static void blend_untransformed_argb(plutovg_surface_t* surface, plutovg_operator_t op, const texture_data_t* texture, const plutovg_span_buffer_t* span_buffer)
+-{
++static void blend_untransformed_argb(plutovg_canvas_t* canvas, plutovg_operator_t op, const texture_data_t* texture, const plutovg_span_buffer_t* span_buffer)
++{
++    plutovg_surface_t* surface = canvas->surface;
++    if(canvas->span_capture && canvas->span_failed) return;
+     composition_function_t func = composition_table[op];
+ 
+     const int image_width = texture->width;
+@@ -756,8 +791,9 @@
+             if(length > 0) {
+                 const int coverage = (spans->coverage * texture->const_alpha) >> 8;
+                 const uint32_t* src = (const uint32_t*)(texture->data + sy * texture->stride) + sx;
+-                uint32_t* dest = (uint32_t*)(surface->data + spans->y * surface->stride) + x;
+-                func(dest, length, src, coverage);
++                uint32_t* dest = canvas->span_capture ? NULL : (uint32_t*)(surface->data + spans->y * surface->stride) + x;
++                if(!span_emit(canvas,op,false,x,spans->y,length,coverage,0,src))
++                    func(dest, length, src, coverage);
+             }
+         }
+ 
+@@ -766,8 +802,10 @@
+ }
+ 
+ #define FIXED_SCALE (1 << 16)
+-static void blend_transformed_argb(plutovg_surface_t* surface, plutovg_operator_t op, const texture_data_t* texture, const plutovg_span_buffer_t* span_buffer)
+-{
++static void blend_transformed_argb(plutovg_canvas_t* canvas, plutovg_operator_t op, const texture_data_t* texture, const plutovg_span_buffer_t* span_buffer)
++{
++    plutovg_surface_t* surface = canvas->surface;
++    if(canvas->span_capture && canvas->span_failed) return;
+     composition_function_t func = composition_table[op];
+     uint32_t buffer[BUFFER_SIZE];
+ 
+@@ -780,8 +818,9 @@
+     int count = span_buffer->spans.size;
+     const plutovg_span_t* spans = span_buffer->spans.data;
+     while(count--) {
+-        uint32_t* target = (uint32_t*)(surface->data + spans->y * surface->stride) + spans->x;
+-
++        uint32_t* target = canvas->span_capture ? NULL : (uint32_t*)(surface->data + spans->y * surface->stride) + spans->x;
++
++        int target_x = spans->x;
+         const float cx = spans->x + 0.5f;
+         const float cy = spans->y + 0.5f;
+ 
+@@ -808,8 +847,11 @@
+                 ++b;
+             }
+ 
+-            func(target, l, buffer, coverage);
+-            target += l;
++            if(!span_emit(canvas,op,false,target_x,spans->y,l,coverage,0,buffer)) {
++                func(target, l, buffer, coverage);
++                target += l;
++            }
++            target_x += l;
+             length -= l;
+         }
+ 
+@@ -817,8 +859,10 @@
+     }
+ }
+ 
+-static void blend_untransformed_tiled_argb(plutovg_surface_t* surface, plutovg_operator_t op, const texture_data_t* texture, const plutovg_span_buffer_t* span_buffer)
+-{
++static void blend_untransformed_tiled_argb(plutovg_canvas_t* canvas, plutovg_operator_t op, const texture_data_t* texture, const plutovg_span_buffer_t* span_buffer)
++{
++    plutovg_surface_t* surface = canvas->surface;
++    if(canvas->span_capture && canvas->span_failed) return;
+     composition_function_t func = composition_table[op];
+ 
+     int image_width = texture->width;
+@@ -852,8 +896,9 @@
+             if(BUFFER_SIZE < l)
+                 l = BUFFER_SIZE;
+             const uint32_t* src = (const uint32_t*)(texture->data + sy * texture->stride) + sx;
+-            uint32_t* dest = (uint32_t*)(surface->data + spans->y * surface->stride) + x;
+-            func(dest, l, src, coverage);
++            uint32_t* dest = canvas->span_capture ? NULL : (uint32_t*)(surface->data + spans->y * surface->stride) + x;
++            if(!span_emit(canvas,op,false,x,spans->y,l,coverage,0,src))
++                func(dest, l, src, coverage);
+             x += l;
+             sx += l;
+             length -= l;
+@@ -866,8 +911,10 @@
+     }
+ }
+ 
+-static void blend_transformed_tiled_argb(plutovg_surface_t* surface, plutovg_operator_t op, const texture_data_t* texture, const plutovg_span_buffer_t* span_buffer)
+-{
++static void blend_transformed_tiled_argb(plutovg_canvas_t* canvas, plutovg_operator_t op, const texture_data_t* texture, const plutovg_span_buffer_t* span_buffer)
++{
++    plutovg_surface_t* surface = canvas->surface;
++    if(canvas->span_capture && canvas->span_failed) return;
+     composition_function_t func = composition_table[op];
+     uint32_t buffer[BUFFER_SIZE];
+ 
+@@ -881,9 +928,10 @@
+     int count = span_buffer->spans.size;
+     const plutovg_span_t* spans = span_buffer->spans.data;
+     while(count--) {
+-        uint32_t* target = (uint32_t*)(surface->data + spans->y * surface->stride) + spans->x;
++        uint32_t* target = canvas->span_capture ? NULL : (uint32_t*)(surface->data + spans->y * surface->stride) + spans->x;
+         const uint32_t* image_bits = (const uint32_t*)texture->data;
+ 
++        int target_x = spans->x;
+         const float cx = spans->x + 0.5f;
+         const float cy = spans->y + 0.5f;
+ 
+@@ -914,8 +962,11 @@
+                 ++b;
+             }
+ 
+-            func(target, l, buffer, coverage);
+-            target += l;
++            if(!span_emit(canvas,op,false,target_x,spans->y,l,coverage,0,buffer)) {
++                func(target, l, buffer, coverage);
++                target += l;
++            }
++            target_x += l;
+             length -= l;
+         }
+ 
+@@ -933,8 +984,10 @@
+ }
+ 
+ #define HALF_POINT (1 << 15)
+-static void blend_transformed_bilinear_tiled_argb(plutovg_surface_t* surface, plutovg_operator_t op, const texture_data_t* texture, const plutovg_span_buffer_t* span_buffer)
+-{
++static void blend_transformed_bilinear_tiled_argb(plutovg_canvas_t* canvas, plutovg_operator_t op, const texture_data_t* texture, const plutovg_span_buffer_t* span_buffer)
++{
++    plutovg_surface_t* surface = canvas->surface;
++    if(canvas->span_capture && canvas->span_failed) return;
+     composition_function_t func = composition_table[op];
+     uint32_t buffer[BUFFER_SIZE];
+ 
+@@ -947,8 +1000,9 @@
+     int count = span_buffer->spans.size;
+     const plutovg_span_t* spans = span_buffer->spans.data;
+     while(count--) {
+-        uint32_t* target = (uint32_t*)(surface->data + spans->y * surface->stride) + spans->x;
+-
++        uint32_t* target = canvas->span_capture ? NULL : (uint32_t*)(surface->data + spans->y * surface->stride) + spans->x;
++
++        int target_x = spans->x;
+         const float cx = spans->x + 0.5f;
+         const float cy = spans->y + 0.5f;
+ 
+@@ -991,8 +1045,11 @@
+                 ++b;
+             }
+ 
+-            func(target, l, buffer, coverage);
+-            target += l;
++            if(!span_emit(canvas,op,false,target_x,spans->y,l,coverage,0,buffer)) {
++                func(target, l, buffer, coverage);
++                target += l;
++            }
++            target_x += l;
+             length -= l;
+         }
+ 
+@@ -1007,9 +1064,9 @@
+     uint32_t alpha = plutovg_alpha(solid);
+ 
+     if(alpha == 255 && state->op == PLUTOVG_OPERATOR_SRC_OVER) {
+-        blend_solid(canvas->surface, PLUTOVG_OPERATOR_SRC, solid, span_buffer);
+-    } else {
+-        blend_solid(canvas->surface, state->op, solid, span_buffer);
++        blend_solid(canvas, PLUTOVG_OPERATOR_SRC, solid, span_buffer);
++    } else {
++        blend_solid(canvas, state->op, solid, span_buffer);
+     }
+ }
+ 
+@@ -1019,6 +1076,7 @@
+         return;
+     plutovg_state_t* state = canvas->state;
+     gradient_data_t data;
++    data.capture_failure = canvas->span_capture ? &canvas->span_failed : NULL;
+     data.spread = gradient->spread;
+     data.matrix = gradient->matrix;
+     plutovg_matrix_multiply(&data.matrix, &data.matrix, &state->matrix);
+@@ -1075,7 +1133,7 @@
+         data.values.linear.y1 = gradient->values[1];
+         data.values.linear.x2 = gradient->values[2];
+         data.values.linear.y2 = gradient->values[3];
+-        blend_linear_gradient(canvas->surface, state->op, &data, span_buffer);
++        blend_linear_gradient(canvas, state->op, &data, span_buffer);
+     } else {
+         data.values.radial.cx = gradient->values[0];
+         data.values.radial.cy = gradient->values[1];
+@@ -1083,7 +1141,7 @@
+         data.values.radial.fx = gradient->values[3];
+         data.values.radial.fy = gradient->values[4];
+         data.values.radial.fr = gradient->values[5];
+-        blend_radial_gradient(canvas->surface, state->op, &data, span_buffer);
++        blend_radial_gradient(canvas, state->op, &data, span_buffer);
+     }
+ }
+ 
+@@ -1103,20 +1161,37 @@
+     plutovg_matrix_multiply(&data.matrix, &data.matrix, &state->matrix);
+     if(!plutovg_matrix_invert(&data.matrix, &data.matrix))
+         return;
++    /* Capture never enters upstream fixed-point casts outside their domain. */
++    if(canvas->span_capture) {
++        const plutovg_matrix_t* m = &data.matrix;
++        const float values[] = {m->a,m->b,m->c,m->d,m->e,m->f};
++        for(int i=0;i<6;++i) if(!isfinite(values[i]) || fabsf(values[i]) * FIXED_SCALE > INT_MAX - FIXED_SCALE) {
++            canvas->span_failed = true; return;
++        }
++        for(int corner=0;corner<4;++corner) {
++            float x = (corner & 1) ? canvas->surface->width + 0.5f : 0.5f;
++            float y = (corner & 2) ? canvas->surface->height + 0.5f : 0.5f;
++            float px = m->a*x + m->c*y + m->e;
++            float py = m->b*x + m->d*y + m->f;
++            if(!isfinite(px) || !isfinite(py) || fabsf(px)*FIXED_SCALE > INT_MAX - FIXED_SCALE || fabsf(py)*FIXED_SCALE > INT_MAX - FIXED_SCALE) {
++                canvas->span_failed = true; return;
++            }
++        }
++    }
+     const plutovg_matrix_t* matrix = &data.matrix;
+     if(matrix->a == 1 && matrix->b == 0 && matrix->c == 0 && matrix->d == 1) {
+         if(texture->type == PLUTOVG_TEXTURE_TYPE_PLAIN) {
+-            blend_untransformed_argb(canvas->surface, state->op, &data, span_buffer);
++            blend_untransformed_argb(canvas, state->op, &data, span_buffer);
+         } else {
+-            blend_untransformed_tiled_argb(canvas->surface, state->op, &data, span_buffer);
++            blend_untransformed_tiled_argb(canvas, state->op, &data, span_buffer);
+         }
+     } else {
+         if(texture->type == PLUTOVG_TEXTURE_TYPE_PLAIN) {
+-            blend_transformed_argb(canvas->surface, state->op, &data, span_buffer);
++            blend_transformed_argb(canvas, state->op, &data, span_buffer);
+         } else if(fabsf(matrix->b) > 1e-6f || fabsf(matrix->c) > 1e-6f) {
+-            blend_transformed_bilinear_tiled_argb(canvas->surface, state->op, &data, span_buffer);
++            blend_transformed_bilinear_tiled_argb(canvas, state->op, &data, span_buffer);
+         } else {
+-            blend_transformed_tiled_argb(canvas->surface, state->op, &data, span_buffer);
++            blend_transformed_tiled_argb(canvas, state->op, &data, span_buffer);
+         }
+     }
+ }
