@@ -21,6 +21,7 @@ set(KRKRSDL_TJS2_SRC
     ${KRKRSDL_TJS2_PATH}/tjsInterCodeExec.cpp
     ${KRKRSDL_TJS2_PATH}/tjsInterCodeGen.cpp
     ${KRKRSDL_TJS2_PATH}/tjsInterface.cpp
+    ${KRKRSDL_TJS2_PATH}/tjsKnownByteCodeCompatibility.cpp
     ${KRKRSDL_TJS2_PATH}/tjsLex.cpp
     ${KRKRSDL_TJS2_PATH}/tjsMath.cpp
     ${KRKRSDL_TJS2_PATH}/tjsMessage.cpp
