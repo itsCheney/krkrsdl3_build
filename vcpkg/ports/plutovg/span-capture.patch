@@ -8,7 +8,7 @@
  
  #ifdef __cplusplus
  extern "C" {
-@@ -1499,6 +1500,21 @@
+@@ -1499,6 +1500,22 @@
   */
  PLUTOVG_API plutovg_canvas_t* plutovg_canvas_create(plutovg_surface_t* surface);
  
@@ -25,6 +25,7 @@
 +PLUTOVG_API bool plutovg_canvas_span_capture_failed(const plutovg_canvas_t* canvas);
 +PLUTOVG_API bool plutovg_canvas_rebind_surface(plutovg_canvas_t* canvas, plutovg_surface_t* surface);
 +PLUTOVG_API bool plutovg_surface_is_owned(const plutovg_surface_t* surface);
++PLUTOVG_API plutovg_path_t* plutovg_path_clone_checked(const plutovg_path_t* path);
 +
 +
  /**
@@ -532,3 +533,27 @@
          }
      }
  }
+--- a/source/plutovg-path.c
++++ b/source/plutovg-path.c
+@@ -614,3 +614,21 @@
++/* Checked clone for the bounded KRKR recording transaction. */
++plutovg_path_t* plutovg_path_clone_checked(const plutovg_path_t* path)
++{
++    if(!path || path->elements.size < 0 || sizeof(plutovg_path_t) > 256)
++        return NULL;
++    size_t count = (size_t)path->elements.size;
++    if(count > SIZE_MAX / sizeof(plutovg_path_element_t)) return NULL;
++    plutovg_path_t* clone = malloc(sizeof(plutovg_path_t));
++    if(!clone) return NULL;
++    *clone = *path;
++    plutovg_init_reference(clone);
++    clone->elements.data = count ? malloc(count * sizeof(plutovg_path_element_t)) : NULL;
++    if(count && !clone->elements.data) { free(clone); return NULL; }
++    clone->elements.capacity = clone->elements.size;
++    if(count) memcpy(clone->elements.data, path->elements.data, count * sizeof(plutovg_path_element_t));
++    return clone;
++}
++
+ plutovg_path_t* plutovg_path_clone(const plutovg_path_t* path)
+ {
+     plutovg_path_t* clone = plutovg_path_create();
