@@ -969,6 +969,8 @@ extern "C" bool MikageKRKRGetStats(MikageKRKRStats *stats)
 
 extern "C" bool MikageKRKRTakeLayerWorkProfile(MikageKRKRLayerWorkProfile *profile)
 {
+    krkrsdl3::layer_work::lastSuccessfulProfileWindowID=0;
+    krkrsdl3::layer_work::lastSuccessfulProfileGeneration=0;
     if(!running || !profile || !diagnosticCallback.load(std::memory_order_acquire)) return false;
     std::memset(profile,0,sizeof(*profile));
     try {
@@ -1003,8 +1005,18 @@ extern "C" bool MikageKRKRTakeLayerWorkProfile(MikageKRKRLayerWorkProfile *profi
         profile->shrinkReadWaitSampleCount=sample.shrinkReadWaitSampleCount;
         std::copy_n(sample.shrinkReadWaitSamplesNS.data(),sample.shrinkReadWaitSampleCount,profile->shrinkReadWaitSamplesNS);
         profile->shrinkReadWaitSamplesDropped=sample.shrinkReadWaitSamplesDropped;
+        krkrsdl3::layer_work::lastSuccessfulProfileWindowID=sample.spanRouteWindowID;
+        krkrsdl3::layer_work::lastSuccessfulProfileGeneration=sample.spanRouteGeneration;
         return true;
     } catch(...) { return false; }
+}
+
+extern "C" uint64_t MikageKRKRLastLayerWorkProfileWindowID(void)
+{
+    if(!krkrsdl3::layer_work::enabled.load(std::memory_order_relaxed) ||
+       krkrsdl3::layer_work::lastSuccessfulProfileGeneration!=
+           krkrsdl3::layer_work::generation.load(std::memory_order_relaxed)) return 0;
+    return krkrsdl3::layer_work::lastSuccessfulProfileWindowID;
 }
 
 extern "C" const char *MikageKRKRLayerWorkProfileOrigins(const MikageKRKRLayerWorkProfile *profile)

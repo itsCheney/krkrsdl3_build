@@ -307,6 +307,9 @@ typedef struct MikageKRKRLayerWorkProfile {
     uint64_t shrinkReadWaitSamplesDropped;
 } MikageKRKRLayerWorkProfile;
 bool MikageKRKRTakeLayerWorkProfile(MikageKRKRLayerWorkProfile *profile);
+// Same-thread ID of the last successful Take; zero after a failed/disabled
+// sample. Adds an accessor without changing the existing C profile layout.
+uint64_t MikageKRKRLastLayerWorkProfileWindowID(void);
 // Borrowed read-only views of the caller-owned sample. Swift cannot import
 // every large inline C array; copy these views while profile remains in scope.
 // These accessors do not sample/reset diagnostics or perform GPU work.
