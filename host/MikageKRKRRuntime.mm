@@ -592,6 +592,11 @@ extern "C" MikageKRKRStepResult MikageKRKRStep(void)
     DiagnosticScriptTraceScope traceScope;
     if (!running)
         return MIKAGE_KRKR_STEP_IDLE;
+    krkrsdl3::cpu_frame::rawLine = [](const char* line) {MikageKRKRLogMessage("KRKR", 3, line);};
+    krkrsdl3::cpu_frame::captureStack = [](char* out, size_t bytes, unsigned frames) {
+        return diagnosticScriptOnVMThread() && TJS::TJSGetStackTraceUTF8(out, static_cast<TJS::tjs_uint>(bytes), frames);
+    };
+    krkrsdl3::cpu_frame::StepScope cpuStep;
 
     try {
         const Uint64 frameStarted = SDL_GetTicksNS();
@@ -600,6 +605,18 @@ extern "C" MikageKRKRStepResult MikageKRKRStep(void)
         SDL_Event event;
         while (pollKRKREvent(&event)) {
             ++eventCount;
+            switch (event.type) {
+                case SDL_EVENT_WINDOW_EXPOSED:
+                case SDL_EVENT_WINDOW_RESIZED:
+                case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+                case SDL_EVENT_WINDOW_SHOWN:
+                case SDL_EVENT_WINDOW_HIDDEN:
+                case SDL_EVENT_WINDOW_RESTORED:
+                case SDL_EVENT_DID_ENTER_FOREGROUND:
+                case SDL_EVENT_DID_ENTER_BACKGROUND:
+                    krkrsdl3::TVPInvalidatePresentation("host.lifecycle");break;
+                default:break;
+            }
             SDL_AppResult result = SDL_AppEvent(appState, &event);
             if (result != SDL_APP_CONTINUE)
                 return finishForResult(result);
@@ -685,6 +702,7 @@ extern "C" bool MikageKRKRSetForeground(bool value)
     try {
         if (foreground == value)
             return true;
+        krkrsdl3::TVPInvalidatePresentation(value ? "host.foreground" : "host.background");
         if (!value) {
             foreground = false;
             if (Application)
