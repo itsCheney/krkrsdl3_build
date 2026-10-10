@@ -594,7 +594,7 @@ extern "C" MikageKRKRStepResult MikageKRKRStep(void)
         return MIKAGE_KRKR_STEP_IDLE;
     krkrsdl3::cpu_frame::rawLine = [](const char* line) {MikageKRKRLogMessage("KRKR", 3, line);};
     krkrsdl3::cpu_frame::captureStack = [](char* out, size_t bytes, unsigned frames) {
-        return diagnosticScriptOnVMThread() && TJS::TJSGetStackTraceUTF8(out, static_cast<TJS::tjs_uint>(bytes), frames);
+        return diagnosticScriptOnVMThread() && TJS::TJSGetStackTraceUTF8(out, static_cast<tjs_uint>(bytes), frames);
     };
     krkrsdl3::cpu_frame::StepScope cpuStep;
 
