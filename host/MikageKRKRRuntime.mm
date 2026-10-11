@@ -60,6 +60,8 @@ void diagnosticSDLOutput(void *, int category, SDL_LogPriority priority, const c
 
 // Defined in the core with C++ linkage.
 void TVPSetSkippedMovies(const char *names);
+// Defined in the core with C++ linkage; runs kag.saveSystemVariables.
+void TVPDoSaveSystemVariables();
 
 extern "C" void MikageKRKRLogMessage(const char *source, int32_t level, const char *message)
 {
@@ -287,6 +289,9 @@ namespace {
 bool running = false;
 bool foreground = true;
 bool stopRequested = false;
+// Nonzero while MikageKRKRStep is on the stack. A modal SDL dialog pumps the
+// run loop mid-script, so host callbacks can arrive inside a step.
+int stepDepth = 0;
 void *appState = nullptr;
 std::string lastError;
 MikageKRKRMenuCallback menuCallback = nullptr;
@@ -597,6 +602,10 @@ extern "C" MikageKRKRStepResult MikageKRKRStep(void)
         return diagnosticScriptOnVMThread() && TJS::TJSGetStackTraceUTF8(out, static_cast<tjs_uint>(bytes), frames);
     };
     krkrsdl3::cpu_frame::StepScope cpuStep;
+    struct StepDepth {
+        StepDepth() { ++stepDepth; }
+        ~StepDepth() { --stepDepth; }
+    } depth;
 
     try {
         const Uint64 frameStarted = SDL_GetTicksNS();
@@ -704,6 +713,11 @@ extern "C" bool MikageKRKRSetForeground(bool value)
             return true;
         krkrsdl3::TVPInvalidatePresentation(value ? "host.foreground" : "host.background");
         if (!value) {
+            // The engine's idle compact now saves system variables at most
+            // once a minute. iOS may terminate a backgrounded app without
+            // onClose, so persist them here unless script is mid-execution.
+            if (running && !stepDepth)
+                TVPDoSaveSystemVariables();
             foreground = false;
             if (Application)
                 Application->NotifyActiveEvent(eTVPActiveEvent::onDeactive);
