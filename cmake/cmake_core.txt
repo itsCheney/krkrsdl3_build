@@ -43,6 +43,7 @@ set(KRKRSDL_CORE_SRC
     ${KRKRSDL_CORE_PATH}/render/LayerManager.cpp
     ${KRKRSDL_CORE_PATH}/render/LayerTreeOwner.cpp
     ${KRKRSDL_CORE_PATH}/render/RenderManager.cpp
+    ${KRKRSDL_CORE_PATH}/render/MetalLayerRenderManager.cpp
     ${KRKRSDL_CORE_PATH}/render/TVPTrans.cpp
 	${KRKRSDL_CORE_PATH}/render/TVPColor.cpp
     ${KRKRSDL_CORE_PATH}/render/TVPCompositor.cpp
@@ -69,6 +70,7 @@ set(KRKRSDL_CORE_SRC
     ${KRKRSDL_CORE_PATH}/script/tjsNativeSystem.cpp
     ${KRKRSDL_CORE_PATH}/script/tjsNativeTimer.cpp
     ${KRKRSDL_CORE_PATH}/script/tjsNativeVideoOverlay.cpp
+    ${KRKRSDL_CORE_PATH}/script/TVPSkippedMovies.cpp
     ${KRKRSDL_CORE_PATH}/script/tjsNativeWaveSoundBuffer.cpp
     ${KRKRSDL_CORE_PATH}/script/tjsNativeWindow.cpp
     ${KRKRSDL_CORE_PATH}/script/TVPScript.cpp

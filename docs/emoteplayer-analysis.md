@@ -87,3 +87,125 @@ emoteplayer 是一个 **Live2D 式（EMOTE/PSB 格式）动画播放器插件**�
 | 混合/蒙版语义 | 后端 `SetBlendMode` / `SetMask`（core/render/backend/）与插件 draw 调用处 |
 | 输出方式（去回读直通 GPU） | `EmotePlayer::drawToTarget`（emoteplayerclass.cpp，已实现，D3DEmotePlayer 使用） |
 | 图标格式/解码 | `emotefile.cpp` 的 readIconTobuffer / ensureLoad |
+
+## 6. 资源加载与脚本对象构建
+
+- `ResourceManager` 的 `cacheData` 属于各个 manager。原生 D3D 播放器默认
+  创建独立 manager，clone 才显式共享；不能假定它是全局缓存。
+- 归档内 PSB 的已解压/解密字节及字符串、名称、资源块索引另有会话共享缓存，
+  键为规范资源路径和解密种子。保留预算为 64 MiB，按 LRU 淘汰，超大资源
+  不进入缓存。每个 `emotefile` 保留独立读取游标和索引副本，仍重新构建自己的
+  动画树、变量、图标像素及 GPU 纹理；共享数据不含 TJS 对象或后端句柄。
+  散文件、自定义 Emote 解密回调及启用 XP3 内容/提取过滤器时绕过共享缓存，
+  保证文件修改、动态归档内容和回调副作用可见。
+- 脚本 `ResourceManager.load()` 仍返回新建的完整 PSB 对象树，即使文件已在
+  缓存中。脚本可修改返回的数组和字典，不能直接把同一可变 root 交给多个调用者。
+- 原生 `D3DEmotePlayer::load()` 不使用脚本 root，改走 `ensureLoaded()`，省去
+  构建后立即销毁完整对象树的开销。文件加载失败不会发布到资源缓存。
+- `getVariableFrameList()` 经 `readVariableFrameList()` 按 PSB 偏移查找
+  `metadata.variableList`，只构建匹配变量的 `frameList`。返回值仍由原解码器
+  生成，保留额外字段、嵌套对象、类型和顺序，并且每次调用独立可变。
+- PSB 数组构建预留已知容量，空白尾部槽位直接调用原生 `Add` 原语；自定义
+  构造函数预填充或失效数组时仍走原来的数字索引写入。数组和字典的构建过程
+  由 variant 持有，解析异常时释放已建子树。
+- Array/Dictionary 原生类初始化直接复制当前非静态成员，省去为每个成员
+  构建枚举回调参数的开销。仍使用原工厂和构造函数，保留隐藏成员、闭包
+  this 绑定、类对象动态修改及非内置类的虚拟枚举，不缓存可变 root 模板。
+- PSB 表按块读取：NUL 结尾字符串和定长数组项一次读多个字节，不再逐字节调用
+  虚函数。数组项超过 32 位目标时只保留低四字节，但仍按完整项长推进游标，
+  因此畸变的长度字节既不会越界写栈缓冲，也不会让读取停滞。
+- 完整 root 构建时字符串表和名称表各读一次并复用（4000 对象样例：流读取
+  325k → 128k 次，首棵 root 5.2 ms → 3.5 ms）。局部元数据查询不构建字符串表，
+  保持原有的最小读取集。
+
+慢加载日志中的 `fileLoadMS` 包含读取、解压、解密和原生动画树解析，
+`rootMS` 是脚本对象树构建。`rootRequested=0` 标识原生入口跳过了 root。
+`managerId` 与同一进程内稳定的匿名 `resourceId`，配合 cache hit/miss 和
+unload 计数，可区分跨 manager 加载与卸载后重载；日志不记录资源路径。
+`sharedCacheHit` 只表示本次从会话缓存取到了已解码数据，本地 manager 命中
+不会重复计算。`sharedHits/sharedMisses/sharedBytes/sharedEntries/sharedEvictions`
+报告共享缓存累计计数及当前保留量；`customDecrypt` 表示本次调用自定义解密，
+`archiveFilter` 标识因 XP3 过滤器而绕过共享缓存。
+
+`unload()`/`unloadAll()` 释放 manager 自己的文件，供后续播放器复用的只读
+数据可继续保留。`clearCache()`、解密配置更换、显式 storage/archive 清理，
+以及游戏启动/退出会清除保留项；最小化级别及以上的内存整理只按 LRU 收缩到
+预算的四分之一，保留热点资源，避免游戏例行调用 `System.doCompact()` 之后
+整批重读。每次清除都记录调用来源，便于在真机日志中归因随后的重载。规范路径
+写入、文件截断和 XP3 过滤器更换也会使相关数据失效；失效前开始的加载不能在
+随后把旧内容重新发布进缓存。已运行播放器通过只读引用继续使用原来的数据，
+因此 64 MiB 是缓存的保留预算，并非全部活动资源的内存上限。外部替换归档
+遵循引擎原有的显式清理 storage/archive 缓存约定。
+
+脚本 API 是同步的，`load()` 必须在返回前交出新建的可变对象树，TJS 对象也只能
+在 VM 线程创建，所以「读取文件 + 构建 root」无法整体搬到后台线程。可搬运的
+只有不含 TJS 对象的那部分，即共享缓存中的已解压/解密表数据。当前实现因此
+不引入后台预读，而是压低同步路径本身的成本（按块读取、表只读一次）并让内存
+整理保留热点条目，在不变更 `load()` 同步契约的前提下减少重复加载。
+
+`Tests/EmoteMetadata` 将生产 PSB 读取函数与真实 TJS VM、PSB 数组解码器
+一起运行，验证完整 root 与局部查询的结果、可变对象隔离、类型/字段兼容，
+以及查询时不读取无关的大型动画子树；夹具还覆盖超过 32 位的数组项截断和
+畸变长度字节的消费。共享加载器夹具还验证原始/LZ4/MDF
+容器、种子解密、自定义回调绕过、独立游标、失效和生命周期，以及内存整理
+收缩后最近使用的条目仍命中、最旧的条目需重新读取；动画树生成
+使用测试替身。独立 LRU 和会话脚本验证预算、并发访问、异常发布及退出清理。
+这些检查不代表真机帧率或完整游戏兼容性测试。
+
+## 7. 持续播放时的 Metal 诊断
+
+开启应用诊断时，主机启用 `MIKAGE_METAL_DIAGNOSTICS`。后端每秒最多采样
+一个命令缓冲，在完成回调记录真实 GPU 起止时间、工作类型计数、提交/完成
+时刻和渲染帧编号。`metal.gpuCommandBuffer` 的 `mixed` 表示混合任务，不能
+把该缓冲的总时间分摊为网格、图层计算或传输耗时；本实现没有采集逐阶段
+GPU 时间戳，也不增加命令提交、同步等待或 GPU 屏障。
+
+`metal.cpuWait` 单独记录超过 8 ms 的回读、队列和 `nextDrawable` 等待，每种
+操作每秒最多一条；回读记录区域尺寸及其中的 GPU 同步等待时间。这些是
+主线程等待耗时，不能当作某个 GPU 阶段的执行时间。具体字段见
+`Tests/MetalRenderBackend/README.md`。
+
+慢单点查询用同一个 `pointQueryID` 关联三条记录：`metal.cpuWait` 提供 Metal
+命令编号/同步等待，`metal.pointRead` 提供读取入口、触发来源、图层对象标识、
+纹理编号/版本及缓存失效原因，`metal.pointCaller` 提供最多四层、512 字节的
+TJS 调用信息。详情和调用栈只在原有慢回读限频通过后采集，不增加 GPU 操作。
+
+`source` 区分 Layer 命中检测、Layer/Bitmap 的颜色与透明度读取；`trigger`
+记录输入、重检或脚本 `getLayerAt` 入口，嵌套显式重检保留 `parentTrigger`。
+这些标记描述代码入口，并非硬件触摸事件的独立证明。`owner` 是当前进程内
+对象标识，可能随对象销毁而复用；单调增长的 `textureID` 用于区分纹理实例。
+
+`miss=invalidated` 的 `invalidation/writer/invalidatedVersion` 保存该缓存点
+第一次失效的写入，`lastWrite/lastWriter/lastRect` 单独表示纹理最近的写入。
+`miss=notCached` 只表示当前缓存中无该坐标，可包含首次访问或槽位被替换，
+不能据此断定发生了整图失效。Emote 覆盖来源标记为 `emote.captureCanvas`
+或 `emote.drawToLayer`。
+
+Release 构建的脚本栈由主机在外层执行边界取得独立引用，保留到会话完全退出；
+不切换 `TJSEnableDebugMode`。只在当前 VM 线程同步读取栈，关闭日志立即停止
+查询采集。缺少调试映射的预编译脚本可能给出默认行号，所以输出标记
+`positions=unverified`；没有可用脚本栈则为 `traceState=unavailable`。
+
+### 光标属性刷新与整图覆盖
+
+原生 `TVPWindow` 的光标和悬浮提示显示接口目前为空实现。内置 Basic、D3D
+绘制设备仅在管理这个原生窗口时，关闭 `NotifyMouseCursorChange` /
+`NotifyHintChange` 为更新显示而做的图层查询，避免脚本设置 `cursor` 时同步
+读取 GPU alpha。属性值仍保存；这些无输出的属性刷新不再附带触发 `onHitTest`。
+真实鼠标/触摸、输入重检和显式脚本查询仍走原命中检测。自定义 owner、窗口或
+设备子类默认保留原行为；解绑、更换 owner 和设备销毁恢复保守策略，不增加
+对外接口的虚函数。剩余属性查询标记为 `cursorChange` / `hintChange`。
+
+Emote 完整帧经 `CopyMainImageFromGPUTarget` 写入。独占、可写 GPU 图像直接
+覆盖；共享或静态图像先分配同尺寸的新纹理，只复制新帧，成功后才替换引用，
+省掉原来 `Independ()` 对即将丢弃的旧图像做的完整复制。失败时不发布候选纹理，
+独占的 CPU 固定地址及活动租约仍拒绝 GPU 覆盖。后端返回 false 必须表示未
+改写目标内容；目前 Metal 在编码复制前完成所有失败检查。
+
+完整 GPU 复制还校验实际图像尺寸。图层矩形可小于图像，CPU 回退因此按实际
+图像边界、源/目标行跨度逐行复制，保留覆盖区域之外的像素。空读取或无效行
+跨度不会先打开破坏性的完整覆盖租约；目标读取通过作用域保证释放。
+
+`Tests/LayerInput` 抽取生产输入/设备生命周期方法验证策略和真实输入；
+`Tests/MetalLayer` 验证图像替换、共享隔离及失败回退。可移植测试中的设备与
+图层输入替身不能证明 iPhone 帧率，原生 Metal 路径仍由 Apple CI 和真机验收。

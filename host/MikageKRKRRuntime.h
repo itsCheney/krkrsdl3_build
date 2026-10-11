@@ -22,6 +22,23 @@ typedef void (*MikageKRKRLogCallback)(const char *source, int32_t level, const c
 // May be called on runtime worker threads. NULL disables host log collection.
 void MikageKRKRSetLogCallback(MikageKRKRLogCallback callback);
 
+// Movie file names to skip, separated by newlines; NULL or empty clears the
+// list. Matching uses the base name only and ignores case, so directories and
+// a `?` parameter suffix may be included. A skipped movie reports normal
+// end-of-playback immediately, which lets a waiting script continue.
+// The string is copied. Call before MikageKRKRStart; it does not affect a
+// movie that is already playing.
+void MikageKRKRSetSkippedMovies(const char *newlineSeparatedNames);
+
+// Select the animation implementation for the next Start. Does not change the
+// current session or its existing/new Emote players. Default is legacy (false).
+// The host's explicit choice overrides an environment or prior SDL hint.
+void MikageKRKRSetExperimentalEmote(bool enabled);
+// Next-start A/B options, default 0. Bits: node cache, capture cache, local
+// update, region copy, async pointer alpha, experimental deformation bounds,
+// experimental local pose evaluation (requires node cache).
+void MikageKRKRSetEmotePerformanceOptions(uint32_t flags);
+
 typedef struct MikageKRKRStats {
     double framesPerSecond;
     double frameTimeMilliseconds;
@@ -36,19 +53,274 @@ typedef struct MikageKRKRStats {
     double gpuSubmissionTimeMilliseconds;
     // Last frame's command-capacity + drawable wait; part of main-thread time.
     double presentationWaitTimeMilliseconds;
+    // Cumulative counters for the current Layer session (not Emote meshes).
+    uint64_t gpuLayerComposition;
+    uint64_t gpuLayerOperations;
+    uint64_t layerCPUFallbacks;
+    uint64_t layerUploadedBytes;
+    uint64_t layerReadbackBytes;
+    uint64_t layerGPUResidentBytes;
+    uint64_t layerCPUCacheBytes;
+    uint64_t layerPinnedCPUTextures;
+    // GPU->CPU readback attribution. Each pair reports cumulative bytes and
+    // events for one source; the byte buckets sum to layerReadbackBytes.
+    uint64_t layerReadbackLockBytes;
+    uint64_t layerReadbackLockCount;
+    uint64_t layerReadbackFallbackBytes;
+    uint64_t layerReadbackFallbackCount;
+    uint64_t layerReadbackPersistentBytes;
+    uint64_t layerReadbackPersistentCount;
+    uint64_t layerReadbackPixelsBytes;
+    uint64_t layerReadbackPixelsCount;
+    uint64_t layerReadbackDetachBytes;
+    uint64_t layerReadbackDetachCount;
+    uint64_t layerReadbackPointBytes;
+    uint64_t layerReadbackPointCount;
+    uint64_t layerPointCacheHits;
+    uint64_t layerPointCacheMisses;
+
+    // Software fallback attribution. Role counters only advance when that
+    // operand caused a real GPU->CPU readback.
+    uint64_t layerFallbackTargetReadbackBytes;
+    uint64_t layerFallbackTargetReadbackCount;
+    uint64_t layerFallbackSourceReadbackBytes;
+    uint64_t layerFallbackSourceReadbackCount;
+    uint64_t layerFallbackReferenceReadbackBytes;
+    uint64_t layerFallbackReferenceReadbackCount;
+
+    // Why Layer operations rejected the Metal path before using software.
+    uint64_t layerGPURejectTargetUnavailable;
+    uint64_t layerGPURejectTargetCPUResident;
+    uint64_t layerGPURejectMultipleInputs;
+    uint64_t layerGPURejectUnsupportedMethod;
+    uint64_t layerGPURejectUnsupportedStretch;
+    uint64_t layerGPURejectInvalidOpacity;
+    uint64_t layerGPURejectSourceUnavailable;
+    uint64_t layerGPURejectSourceFormat;
+    uint64_t layerGPURejectInvalidGeometry;
+    uint64_t layerGPURejectUnsupportedKind;
+    uint64_t layerGPURejectAlphaTables;
+    uint64_t layerGPURejectBackendFailure;
+    uint64_t layerGPURejectTriangles;
+    uint64_t layerGPURejectPerspective;
+
+    // Top cumulative reject methods for the current Layer session. Comma-
+    // separated "method:count" entries; multiple-input keys include [N].
+    char layerMultipleInputMethods[512];
+    char layerUnsupportedMethods[512];
+
+    // D3DAdaptor captureCanvas bridge diagnostics.
+    uint64_t emoteCaptureCalls;
+    uint64_t emoteCaptureCPUFallbacks;
+    uint64_t emoteCaptureCPUBytes;
+    uint64_t emoteCaptureGPUCopies;
+    uint64_t emoteCaptureGPUBytes;
+
+    // M5 cumulative runtime profiling. Times are nanoseconds for lossless
+    // interval differencing in the host heartbeat.
+    uint64_t emoteProgressCalls;
+    uint64_t emoteProgressTimeNS;
+    uint64_t emotePrepareCalls;
+    uint64_t emotePrepareTimeNS;
+    uint64_t emoteDrawCalls;
+    uint64_t emoteDrawTimeNS;
+    uint64_t emoteCaptureProfileCalls;
+    uint64_t emoteCaptureTimeNS;
+
+    // M6.2 Emote prepare breakdown.
+    uint64_t emotePrepareTransformTimeNS;
+    uint64_t emotePrepareMotionProgressTimeNS;
+    uint64_t emotePrepareSnapshotTimeNS;
+    uint64_t emoteNodeProgressCalls;
+    uint64_t emoteNodeProgressTimeNS;
+    uint64_t emoteSubmotionCreates;
+    uint64_t emoteSubmotionRebuildTimeNS;
+    uint64_t emoteShapeBuildCalls;
+    uint64_t emoteShapeBuildTimeNS;
+    uint64_t emoteShapeVertices;
+    uint64_t emoteMeshBuildCalls;
+    uint64_t emoteMeshBuildTimeNS;
+    uint64_t emoteMeshVerticesBuilt;
+    uint64_t emoteDeformedVerticesBuilt;
+    uint64_t emoteGPUDeformDraws;
+    uint64_t emoteGPUDeformVertices;
+    uint64_t emoteRenderSteps;
+    uint64_t emotePlayerDraws;
+    uint64_t emoteDistinctPlayerDraws;
+    uint64_t emoteRepeatedPlayerDraws;
+    uint64_t emoteDistinctTargets;
+    uint64_t emoteMaxDrawsPerStep;
+    uint64_t emoteMaxPlayersPerStep;
+    uint64_t emoteMaxDrawsPerPlayerStep;
+
+    uint64_t meshDrawCalls;
+    uint64_t meshVertices;
+    uint64_t meshIndices;
+    uint64_t meshCPUTimeNS;
+    uint64_t meshValidationTimeNS;
+    uint64_t meshBufferAllocations;
+    uint64_t meshBufferBytes;
+    uint64_t meshBufferAllocationTimeNS;
+    uint64_t metalSubmits;
+    uint64_t metalSyncWaits;
+    uint64_t metalSyncWaitTimeNS;
+    uint64_t metalQueueWaitTimeNS;
+    uint64_t metalRingBytes;
+    uint64_t metalRingSuballocs;
+    uint64_t metalRingSuballocTimeNS;
+    uint64_t metalRingWraps;
+    uint64_t metalRingStallTimeNS;
+    uint64_t metalRingHighWaterBytes;
+    uint64_t metalRingFallbackAllocations;
+    uint64_t metalRingFallbackBytes;
+    uint64_t stepEventTimeNS;
+    uint64_t stepIterateTimeNS;
+    // Session-cumulative command generation. Difference consecutive heartbeats
+    // and divide by their frame delta for a per-frame average.
+    uint64_t metalRenderEncoders;
+    uint64_t metalComputeEncoders;
+    uint64_t metalBlitEncoders;
+    uint64_t metalLayerRectSnapshots;
+    uint64_t metalLayerRectSnapshotBytes;
+    uint64_t metalSurfaceUploadBytes;
+    uint64_t emoteMaskClears;
+    uint64_t emoteMaskDraws;
+    uint64_t emoteUniqueMaskGroups;
+    uint64_t emoteLayerGPUCopies;
+    uint64_t emoteLayerGPUCopyBytes;
+    uint64_t emoteLayerCPUReadbacks;
+    uint64_t emoteLayerCPUReadbackBytes;
+    uint64_t emoteLayerCPUReadbackTimeNS;
+    uint64_t emoteCaptureSkipped;
+    uint64_t emoteCaptureRegionPixels;
+    uint64_t emoteCaptureFullPixels;
+    uint64_t emoteNodeCacheHits;
+    uint64_t emoteNodeCacheMisses;
+    uint64_t emoteShapeCacheHits;
+    uint64_t emoteMeshCacheHits;
+    uint64_t emoteDrawListRebuilds;
+    uint64_t emoteCaptureKnownBounds;
+    uint64_t emoteCaptureUnknownBounds;
+    uint64_t emoteCaptureCOWFallbacks;
+    uint64_t emoteAlphaRequests;
+    uint64_t emoteAlphaCacheHits;
+    uint64_t emoteAlphaPendingEvents;
+    uint64_t emoteAlphaReadBytes;
+    uint64_t emoteAlphaFailures;
+    uint64_t emoteUISyncReads;
+    uint64_t emoteUISyncWaitNS;
+    uint64_t emoteCaptureExperimentalBoundsKnown;
+    uint64_t emoteCaptureExperimentalBoundsUnknown;
+    uint64_t emoteCaptureExperimentalBoundsPixels;
+    uint64_t emoteCaptureExperimentalBoundsNS;
+    uint64_t emoteCaptureUpdatePixels;
+    uint64_t emoteCaptureUpdateFullPixels;
+    uint64_t emoteLocalPoseCacheHits;
+    uint64_t emoteLocalPoseCacheMisses;
+    uint64_t emoteCaptureRequests;
+    uint64_t emoteCaptureFullCopies;
+    uint64_t emoteCaptureRegionCopies;
+    uint64_t emoteCaptureRegionFallbacks;
+    uint64_t emoteCaptureBoundsNS;
+    // Parameter resource bytes are separate from Layer image uploads.
+    uint64_t layerGammaLUTUploads;
+    uint64_t layerGammaLUTUploadedBytes;
+    uint64_t layerPsTableUploads;
+    uint64_t layerPsTableUploadedBytes;
+    uint64_t layerGPURejectPsTables;
+    uint64_t layerGPURejectAffineAlias;
+    uint64_t layerGPURejectPerspectiveAlias;
 } MikageKRKRStats;
 
 bool MikageKRKRStart(const char *gamePath,
                      const char *renderer,
                      void *uiWindowScene,
                      bool menuGestureEnabled,
+                     bool respectSilentMode,
                      MikageKRKRMenuCallback menuCallback,
                      MikageKRKRCompletionCallback completionCallback,
                      void *context);
 MikageKRKRStepResult MikageKRKRStep(void);
+// Request KRKR's normal main-window close query; game may confirm or cancel.
+// No forced termination and no foreground suspension while it is pending.
+bool MikageKRKRRequestExit(void);
+// Forced host stop for interrupted startup/host lifecycle cleanup.
 void MikageKRKRRequestStop(void);
 bool MikageKRKRSetForeground(bool foreground);
 bool MikageKRKRGetStats(MikageKRKRStats *stats);
+// Diagnostic-only interval snapshot. Main thread; call once per heartbeat.
+// GetStats/HUD polling does not reset these counters. Times are nanoseconds;
+// cpuTimeNS includes readback waits, softwareTimeNS is nested inside it.
+typedef struct MikageKRKRLayerTriangleProfile {
+    uint64_t intervalNS;
+    uint64_t calls;
+    uint64_t triangleCount;
+    uint64_t gpuCalls;
+    uint64_t gpuPixels;
+    uint64_t clipPixels;
+    uint64_t maxClipPixels;
+    uint64_t maxTargetPixels;
+    uint64_t fullSurfaceCalls;
+    uint64_t target1920x1080Calls;
+    uint64_t targetReadbackBytes;
+    uint64_t sourceReadbackBytes;
+    uint64_t referenceReadbackBytes;
+    uint64_t cpuTimeNS;
+    uint64_t maxCpuTimeNS;
+    uint64_t softwareTimeNS;
+    uint64_t maxSoftwareTimeNS;
+    uint64_t count2Calls;
+    uint64_t singleInputCalls;
+    uint64_t referenceCalls;
+    uint64_t sourceTargetAliasCalls;
+    char methods[768];
+    char targetSizes[768];
+    char sources[256];
+    char stretchModes[768];
+} MikageKRKRLayerTriangleProfile;
+bool MikageKRKRTakeLayerTriangleProfile(MikageKRKRLayerTriangleProfile *profile);
+// Opt-in, bounded interval diagnostics. Inclusive stage times must not be added.
+typedef struct MikageKRKRLayerWorkProfile {
+    uint64_t intervalNS;
+    char stages[1024];
+    char transfers[2048];
+    uint64_t amvDecodedFrames;
+    uint64_t amvDecodedBytes;
+    uint32_t workProfileVersion;
+    char transferOrigins[16384];
+    char originOverflow[512];
+    uint32_t frameSampleCount;
+    uint64_t frameIntervalNS[2048];
+    uint64_t frameCpuWallNS[2048];
+    uint64_t frameSamplesDropped;
+    uint32_t transitionProfileVersion;
+    char transitionProfiles[131072];
+    uint64_t transitionProfilesDropped;
+    char transitionOverflow[1024];
+    // C1 append-only tail. Host and App must rebuild together.
+    uint32_t shrinkProfileVersion;
+    char shrinkProfiles[65536];
+    uint64_t shrinkProfilesDropped;
+    char shrinkOverflow[1024];
+    uint32_t shrinkReadWaitSampleCount;
+    uint64_t shrinkReadWaitSamplesNS[2048];
+    uint64_t shrinkReadWaitSamplesDropped;
+} MikageKRKRLayerWorkProfile;
+bool MikageKRKRTakeLayerWorkProfile(MikageKRKRLayerWorkProfile *profile);
+// Same-thread ID of the last successful Take; zero after a failed/disabled
+// sample. Adds an accessor without changing the existing C profile layout.
+uint64_t MikageKRKRLastLayerWorkProfileWindowID(void);
+// Borrowed read-only views of the caller-owned sample. Swift cannot import
+// every large inline C array; copy these views while profile remains in scope.
+// These accessors do not sample/reset diagnostics or perform GPU work.
+const char *MikageKRKRLayerWorkProfileOrigins(const MikageKRKRLayerWorkProfile *profile);
+const char *MikageKRKRLayerWorkProfileTransitions(const MikageKRKRLayerWorkProfile *profile);
+const char *MikageKRKRLayerWorkProfileTransitionOverflow(const MikageKRKRLayerWorkProfile *profile);
+const uint64_t *MikageKRKRLayerWorkProfileFrameIntervals(const MikageKRKRLayerWorkProfile *profile);
+const uint64_t *MikageKRKRLayerWorkProfileFrameCpuWall(const MikageKRKRLayerWorkProfile *profile);
+const char *MikageKRKRLayerWorkProfileShrinks(const MikageKRKRLayerWorkProfile *profile);
+const char *MikageKRKRLayerWorkProfileShrinkOverflow(const MikageKRKRLayerWorkProfile *profile);
+const uint64_t *MikageKRKRLayerWorkProfileShrinkReadWait(const MikageKRKRLayerWorkProfile *profile);
 bool MikageKRKRIsRunning(void);
 const char *MikageKRKRLastError(void);
 void *MikageKRKRNativeWindow(void);

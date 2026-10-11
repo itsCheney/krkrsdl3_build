@@ -2,6 +2,7 @@
 
 #import <Foundation/Foundation.h>
 #import <AVFAudio/AVFAudio.h>
+#include <TargetConditionals.h>
 
 #include <SDL3/SDL.h>
 #define SDL_MAIN_HANDLED
@@ -12,14 +13,27 @@
 #include <cstring>
 #include <vector>
 #include <atomic>
+#include <algorithm>
+#include <array>
 #include <mutex>
 #include <cstdio>
 #include <cstdlib>
+#include <stdexcept>
 #include "TVPCompositor.h"
+#include "WindowManager.h"
+#include "MetalLayerRenderManager.h"
+#include "PointReadTrace.h"
+#include "LayerWorkDiagnostics.h"
+#include "LayerManager.h"
+#include "../cpp/plugins/emoteplayer/emoteperformance.h"
 
 namespace {
 std::atomic<MikageKRKRLogCallback> diagnosticCallback{nullptr};
 std::mutex logOutputMutex;
+std::mutex skippedMoviesMutex;
+std::string skippedMovies;
+std::atomic<bool> experimentalEmote{false};
+std::atomic<uint32_t> emotePerformanceOptions{0};
 thread_local bool mirroringKRKRLog = false;
 SDL_LogOutputFunction previousLogOutput = nullptr;
 void *previousLogContext = nullptr;
@@ -44,15 +58,35 @@ void diagnosticSDLOutput(void *, int category, SDL_LogPriority priority, const c
 }
 }
 
+// Defined in the core with C++ linkage.
+void TVPSetSkippedMovies(const char *names);
+// Defined in the core with C++ linkage; runs kag.saveSystemVariables.
+void TVPDoSaveSystemVariables();
+
 extern "C" void MikageKRKRLogMessage(const char *source, int32_t level, const char *message)
 {
     if (auto callback = diagnosticCallback.load(std::memory_order_acquire))
         callback(source, level, message ? message : "");
 }
 
+extern "C" void MikageKRKRSetSkippedMovies(const char *newlineSeparatedNames)
+{
+    {
+        std::lock_guard<std::mutex> lock(skippedMoviesMutex);
+        skippedMovies = newlineSeparatedNames ? newlineSeparatedNames : "";
+    }
+    // Applied immediately when a session is already running, and re-applied by
+    // MikageKRKRStart so a configuration set before launch is not lost.
+    TVPSetSkippedMovies(newlineSeparatedNames);
+}
+
 extern "C" void MikageKRKRSetLogCallback(MikageKRKRLogCallback callback)
 {
     diagnosticCallback.store(callback, std::memory_order_release);
+    SDL_SetHint("MIKAGE_METAL_DIAGNOSTICS", callback ? "1" : "0");
+    krkrsdl3::point_trace::SetEnabled(callback != nullptr);
+    TVPSetMetalLayerTriangleDiagnostics(callback != nullptr);
+    krkrsdl3::layer_work::SetEnabled(callback != nullptr);
     SDL_LogOutputFunction current = nullptr;
     void *context = nullptr;
     SDL_GetLogOutputFunction(&current, &context);
@@ -75,8 +109,135 @@ extern "C" void MikageKRKRSetLogCallback(MikageKRKRLogCallback callback)
     }
 }
 
+extern "C" void MikageKRKRSetExperimentalEmote(bool enabled)
+{
+    experimentalEmote.store(enabled, std::memory_order_relaxed);
+}
+extern "C" void MikageKRKRSetEmotePerformanceOptions(uint32_t flags)
+{
+    emotePerformanceOptions.store(flags & 127u, std::memory_order_relaxed);
+}
+
+static bool applyEmoteAnimationModeForStart()
+{
+    const bool enabled = experimentalEmote.load(std::memory_order_relaxed);
+    if (!SDL_SetHintWithPriority("MIKAGE_EMOTE_ANIMATION_MODE",
+        enabled ? "integrated" : "legacy", SDL_HINT_OVERRIDE)) return false;
+    MikageKRKRLogMessage("emote", 3, enabled ? "animation.integrated" : "animation.legacy");
+    const char* hints[] = {"MIKAGE_EMOTE_NODE_CACHE", "MIKAGE_EMOTE_CAPTURE_CACHE",
+        "MIKAGE_EMOTE_LOCAL_UPDATE", "MIKAGE_EMOTE_REGION_COPY", "MIKAGE_EMOTE_ASYNC_ALPHA",
+        "MIKAGE_EMOTE_EXPERIMENTAL_BOUNDS", "MIKAGE_EMOTE_LOCAL_POSE_CACHE"};
+    uint32_t flags = emotePerformanceOptions.load(std::memory_order_relaxed);
+#if TARGET_OS_SIMULATOR
+    // No drawable-presented acknowledgement exists in the simulator SDK.
+    // Keep ordinary input rather than publish an unconfirmed alpha frame.
+    flags &= ~(1u << 4);
+#endif
+    for (unsigned i = 0; i < 7; ++i)
+        if (!SDL_SetHintWithPriority(hints[i], flags & (1u << i) ? "1" : "0", SDL_HINT_OVERRIDE))
+            return false;
+    emoteplayer::resetPerformanceStats();
+    char optionsLog[64];
+    std::snprintf(optionsLog, sizeof(optionsLog), "performance.options flags=%u", flags);
+    MikageKRKRLogMessage("emote", 3, optionsLog);
+    return true;
+}
+
+// Leave pointer events in SDL's queue when the alpha-input queue is full.
+// Lifecycle/keyboard/device events remain serviceable, so a blocked GPU cannot
+// prevent quitting, resizing or stopping the session. Pointer FIFO is retained.
+static bool pollKRKREvent(SDL_Event* event)
+{
+    if (!TVPHasPendingLayerPointerBackpressure()) return SDL_PollEvent(event);
+    SDL_PumpEvents();
+    static const std::array<Uint32, 7> pointerTypes = [] {
+        std::array<Uint32, 7> types{{SDL_EVENT_MOUSE_MOTION, SDL_EVENT_MOUSE_BUTTON_DOWN,
+            SDL_EVENT_MOUSE_BUTTON_UP, SDL_EVENT_MOUSE_WHEEL, SDL_EVENT_FINGER_DOWN,
+            SDL_EVENT_FINGER_UP, SDL_EVENT_FINGER_MOTION}};
+        std::sort(types.begin(), types.end());
+        return types;
+    }();
+    Uint32 first = SDL_EVENT_FIRST;
+    for (Uint32 type : pointerTypes) {
+        if (first < type && SDL_PeepEvents(event, 1, SDL_GETEVENT, first, type - 1) > 0) return true;
+        first = type + 1;
+    }
+    return SDL_PeepEvents(event, 1, SDL_GETEVENT, first, SDL_EVENT_LAST) > 0;
+}
+
 #include "TVPApplication.h"
 #include "tjsError.h"
+#include "tjsDebug.h"
+
+namespace {
+bool diagnosticScriptOnVMThread() { return [NSThread isMainThread]; }
+
+// The TJS tracer checks its global pointer separately on function entry/exit.
+// Switching it inside a script/native callback can therefore unbalance its
+// stack. Own a separate reference without enabling TJS debug/object tracing,
+// acquire only at an outer host boundary, and retain it until session teardown.
+struct DiagnosticScriptTraceState
+{
+    unsigned hostDepth = 0;
+    bool sessionActive = false;
+    bool ownsReference = false;
+
+    void Enter(bool requested) noexcept
+    {
+        if (hostDepth++ == 0 && requested && !ownsReference) {
+            try {
+                TJS::TJSAddRefStackTracer();
+                ownsReference = true;
+            } catch (...) {
+                // Stack attribution is optional; allocation failure must not
+                // prevent the game from starting or processing an event.
+            }
+        }
+    }
+    void ReleaseIfIdle() noexcept
+    {
+        if (hostDepth == 0 && !sessionActive && ownsReference) {
+            ownsReference = false;
+            TJS::TJSReleaseStackTracer();
+        }
+    }
+    void Leave() noexcept
+    {
+        --hostDepth;
+        ReleaseIfIdle();
+    }
+    void BeginSession() noexcept { sessionActive = true; }
+    void EndSession() noexcept
+    {
+        sessionActive = false;
+        ReleaseIfIdle();
+    }
+};
+DiagnosticScriptTraceState diagnosticScriptTrace;
+
+struct DiagnosticScriptTraceScope
+{
+    bool entered = diagnosticScriptOnVMThread();
+    DiagnosticScriptTraceScope() noexcept
+    {
+        if (entered)
+            diagnosticScriptTrace.Enter(diagnosticCallback.load(std::memory_order_acquire) != nullptr);
+    }
+    ~DiagnosticScriptTraceScope()
+    {
+        if (entered) diagnosticScriptTrace.Leave();
+    }
+    void BeginSession() noexcept
+    {
+        if (entered) diagnosticScriptTrace.BeginSession();
+    }
+};
+
+void endDiagnosticScriptTraceSession() noexcept
+{
+    if (diagnosticScriptOnVMThread()) diagnosticScriptTrace.EndSession();
+}
+}
 
 void MikageKRKRForwardLog(const ttstr &line)
 {
@@ -128,6 +289,9 @@ namespace {
 bool running = false;
 bool foreground = true;
 bool stopRequested = false;
+// Nonzero while MikageKRKRStep is on the stack. A modal SDL dialog pumps the
+// run loop mid-script, so host callbacks can arrive inside a step.
+int stepDepth = 0;
 void *appState = nullptr;
 std::string lastError;
 MikageKRKRMenuCallback menuCallback = nullptr;
@@ -142,10 +306,16 @@ double currentFPS = 0;
 double currentFrameTimeMS = 0;
 Uint64 frameWorkTotal = 0, frameWorkMax = 0;
 double currentCpuFrameTimeMS = 0, currentMaxCpuFrameTimeMS = 0;
+Uint64 stepEventTimeNS = 0, stepIterateTimeNS = 0;
 constexpr Uint64 nanosecondsPerSecond = 1000000000ULL;
+constexpr Uint64 slowFrameThresholdNS = 50000000ULL;
+Uint64 slowFrameCount = 0;
+Uint64 peakFrameEventTimeNS = 0, peakFrameIterateTimeNS = 0;
+Uint64 peakFrameEventCount = 0;
 
 void resetStats()
 {
+    krkrsdl3::layer_work::ResetFrameHistory();
     statsWindowStarted = SDL_GetTicksNS();
     previousFrameAt = 0;
     frameIntervalTotal = 0;
@@ -154,10 +324,15 @@ void resetStats()
     currentFrameTimeMS = 0;
     frameWorkTotal = frameWorkMax = 0;
     currentCpuFrameTimeMS = currentMaxCpuFrameTimeMS = 0;
+    stepEventTimeNS = stepIterateTimeNS = 0;
+    slowFrameCount = 0;
+    peakFrameEventTimeNS = peakFrameIterateTimeNS = peakFrameEventCount = 0;
 }
 
-void recordFrame(Uint64 presentedAt, Uint64 workDuration)
+void recordFrame(Uint64 presentedAt, Uint64 workDuration,
+                 Uint64 eventDuration, Uint64 iterateDuration, Uint64 eventCount)
 {
+    krkrsdl3::layer_work::RecordFrame(presentedAt,workDuration);
     if (!statsWindowStarted)
         statsWindowStarted = presentedAt;
     if (previousFrameAt)
@@ -165,7 +340,13 @@ void recordFrame(Uint64 presentedAt, Uint64 workDuration)
     previousFrameAt = presentedAt;
     frameCount++;
     frameWorkTotal += workDuration;
-    if (workDuration > frameWorkMax) frameWorkMax = workDuration;
+    if (workDuration >= slowFrameThresholdNS) ++slowFrameCount;
+    if (workDuration > frameWorkMax) {
+        frameWorkMax = workDuration;
+        peakFrameEventTimeNS = eventDuration;
+        peakFrameIterateTimeNS = iterateDuration;
+        peakFrameEventCount = eventCount;
+    }
     Uint64 elapsed = presentedAt - statsWindowStarted;
     if (elapsed >= nanosecondsPerSecond)
     {
@@ -176,7 +357,22 @@ void recordFrame(Uint64 presentedAt, Uint64 workDuration)
                 static_cast<double>(frameIntervalTotal) / (frameCount - 1) / 1000000.0;
         currentCpuFrameTimeMS = static_cast<double>(frameWorkTotal) / frameCount / 1000000.0;
         currentMaxCpuFrameTimeMS = static_cast<double>(frameWorkMax) / 1000000.0;
+        if (slowFrameCount) {
+            // At most one summary per stats window. These are wall durations,
+            // including GPU waits, and all peak fields describe the same step.
+            char message[256];
+            std::snprintf(message, sizeof(message),
+                "runtime.slowFrames count=%llu peakWallMS=%.3f peakEventMS=%.3f "
+                "peakIterateMS=%.3f peakEvents=%llu",
+                static_cast<unsigned long long>(slowFrameCount), currentMaxCpuFrameTimeMS,
+                static_cast<double>(peakFrameEventTimeNS) / 1000000.0,
+                static_cast<double>(peakFrameIterateTimeNS) / 1000000.0,
+                static_cast<unsigned long long>(peakFrameEventCount));
+            MikageKRKRLogMessage("performance", 3, message);
+        }
         frameWorkTotal = frameWorkMax = 0;
+        slowFrameCount = 0;
+        peakFrameEventTimeNS = peakFrameIterateTimeNS = peakFrameEventCount = 0;
         statsWindowStarted = presentedAt;
         previousFrameAt = 0;
         frameIntervalTotal = 0;
@@ -195,6 +391,7 @@ void resetAfterStartFailure(const std::string &message)
             // A partially initialized runtime must not throw across the C boundary.
         }
     }
+    endDiagnosticScriptTraceSession();
     TVPSetGameRunningOrientation(false);
     MikageKRKRSetWindowScene(nullptr);
     running = false;
@@ -230,6 +427,7 @@ void finish(SDL_AppResult result, const char *message)
         result = SDL_APP_FAILURE;
         lastError = "Unknown C++ exception during KRKR shutdown.";
     }
+    endDiagnosticScriptTraceSession();
     TVPSetGameRunningOrientation(false);
     MikageKRKRSetWindowScene(nullptr);
     [[AVAudioSession sharedInstance]
@@ -273,10 +471,12 @@ extern "C" bool MikageKRKRStart(const char *gamePath,
                                   const char *renderer,
                                   void *uiWindowScene,
                                   bool menuGestureEnabled,
+                                  bool respectSilentMode,
                                   MikageKRKRMenuCallback menu,
                                   MikageKRKRCompletionCallback completion,
                                   void *context)
 {
+    DiagnosticScriptTraceScope traceScope;
     if (running) {
         lastError = "A KRKR session is already running.";
         return false;
@@ -300,10 +500,30 @@ extern "C" bool MikageKRKRStart(const char *gamePath,
 
         try {
             MikageKRKRSetLogCallback(diagnosticCallback.load(std::memory_order_acquire));
+            if (!applyEmoteAnimationModeForStart())
+                throw std::runtime_error("Failed to select Emote animation mode.");
+            // SDL defaults to playback on iOS, which ignores the Ring/Silent
+            // switch. The host preference chooses normal game-style ambient
+            // behavior or SDL's playback behavior before any audio device opens.
+            SDL_SetHintWithPriority(
+                SDL_HINT_AUDIO_CATEGORY,
+                respectSilentMode ? "ambient" : "playback",
+                SDL_HINT_OVERRIDE
+            );
+            MikageKRKRLogMessage(
+                "audio",
+                3,
+                respectSilentMode ? "category.ambient" : "category.playback"
+            );
             SDL_SetMainReady();
             MikageKRKRSetWindowScene(uiWindowScene);
             MikageKRKRSetMenuGestureEnabled(menuGestureEnabled);
             TVPSetGameRunningOrientation(true);
+            // Re-applied per session: core state is reset between games.
+            {
+                std::lock_guard<std::mutex> lock(skippedMoviesMutex);
+                TVPSetSkippedMovies(skippedMovies.empty() ? nullptr : skippedMovies.c_str());
+            }
 
             std::vector<std::string> arguments;
             arguments.emplace_back("MikageNext");
@@ -325,8 +545,13 @@ extern "C" bool MikageKRKRStart(const char *gamePath,
             activeRenderer = renderer && *renderer ? renderer : "metal";
             stopRequested = false;
             resetStats();
+            // Capture diagnostics are session-scoped, just like Layer stats.
+            // Do not let a previous game make GPU-copy/fallback counts ambiguous.
+            krkrsdl3::TVPResetEmoteCaptureStats();
+            krkrsdl3::TVPResetRuntimeProfileStats();
             appState = nullptr;
 
+            traceScope.BeginSession();
             SDL_AppResult result = SDL_AppInit(
                 &appState,
                 static_cast<int>(argv.size()),
@@ -369,17 +594,44 @@ extern "C" bool MikageKRKRStart(const char *gamePath,
 
 extern "C" MikageKRKRStepResult MikageKRKRStep(void)
 {
+    DiagnosticScriptTraceScope traceScope;
     if (!running)
         return MIKAGE_KRKR_STEP_IDLE;
+    krkrsdl3::cpu_frame::rawLine = [](const char* line) {MikageKRKRLogMessage("KRKR", 3, line);};
+    krkrsdl3::cpu_frame::captureStack = [](char* out, size_t bytes, unsigned frames) {
+        return diagnosticScriptOnVMThread() && TJS::TJSGetStackTraceUTF8(out, static_cast<tjs_uint>(bytes), frames);
+    };
+    krkrsdl3::cpu_frame::StepScope cpuStep;
+    struct StepDepth {
+        StepDepth() { ++stepDepth; }
+        ~StepDepth() { --stepDepth; }
+    } depth;
 
     try {
         const Uint64 frameStarted = SDL_GetTicksNS();
+        const Uint64 eventsStarted = frameStarted;
+        Uint64 eventCount = 0;
         SDL_Event event;
-        while (SDL_PollEvent(&event)) {
+        while (pollKRKREvent(&event)) {
+            ++eventCount;
+            switch (event.type) {
+                case SDL_EVENT_WINDOW_EXPOSED:
+                case SDL_EVENT_WINDOW_RESIZED:
+                case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+                case SDL_EVENT_WINDOW_SHOWN:
+                case SDL_EVENT_WINDOW_HIDDEN:
+                case SDL_EVENT_WINDOW_RESTORED:
+                case SDL_EVENT_DID_ENTER_FOREGROUND:
+                case SDL_EVENT_DID_ENTER_BACKGROUND:
+                    krkrsdl3::TVPInvalidatePresentation("host.lifecycle");break;
+                default:break;
+            }
             SDL_AppResult result = SDL_AppEvent(appState, &event);
             if (result != SDL_APP_CONTINUE)
                 return finishForResult(result);
         }
+        Uint64 eventDuration = SDL_GetTicksNS() - eventsStarted;
+        stepEventTimeNS += eventDuration;
 
         if (stopRequested)
             return finishForResult(SDL_APP_SUCCESS);
@@ -387,10 +639,24 @@ extern "C" MikageKRKRStepResult MikageKRKRStep(void)
         if (!foreground)
             return MIKAGE_KRKR_STEP_RUNNING;
 
+        // Completion callbacks publish only data. Input and TJS callbacks stay
+        // on this engine thread, while render/timeline progress remains live.
+        const Uint64 pendingInputStarted = SDL_GetTicksNS();
+        TVPProcessPendingLayerPointerEvents();
+        const Uint64 pendingInputDuration = SDL_GetTicksNS() - pendingInputStarted;
+        eventDuration += pendingInputDuration;
+        stepEventTimeNS += pendingInputDuration;
+
+        const Uint64 iterateStarted = SDL_GetTicksNS();
+        krkrsdl3::TVPBeginRuntimeStep();
         SDL_AppResult result = SDL_AppIterate(appState);
+        krkrsdl3::TVPEndRuntimeStep();
+        const Uint64 frameFinished = SDL_GetTicksNS();
+        const Uint64 iterateDuration = frameFinished - iterateStarted;
+        stepIterateTimeNS += iterateDuration;
         if (result == SDL_APP_CONTINUE) {
-            const Uint64 frameFinished = SDL_GetTicksNS();
-            recordFrame(frameFinished, frameFinished - frameStarted);
+            recordFrame(frameFinished, frameFinished - frameStarted,
+                        eventDuration, iterateDuration, eventCount);
         }
         return finishForResult(result);
     } catch (const eTJS &error) {
@@ -404,8 +670,29 @@ extern "C" MikageKRKRStepResult MikageKRKRStep(void)
     return MIKAGE_KRKR_STEP_FAILED;
 }
 
+extern "C" bool MikageKRKRRequestExit(void)
+{
+    DiagnosticScriptTraceScope traceScope;
+    if (!running || !foreground || !TVPMainWindow)
+        return false;
+    try {
+        MikageKRKRLogMessage("bridge", 3, "runtime.userClose.requested");
+        TVPMainWindow->RequestUserClose();
+        return true;
+    } catch (const eTJS &error) {
+        lastError = error.GetMessage().c_str();
+    } catch (const std::exception &error) {
+        lastError = error.what() ? error.what() : "KRKR close-query failed.";
+    } catch (...) {
+        lastError = "Unknown exception requesting KRKR close-query.";
+    }
+    MikageKRKRLogMessage("bridge", 5, lastError.c_str());
+    return false;
+}
+
 extern "C" void MikageKRKRRequestStop(void)
 {
+    DiagnosticScriptTraceScope traceScope;
     try {
         if (running) {
             stopRequested = true;
@@ -419,11 +706,18 @@ extern "C" void MikageKRKRRequestStop(void)
 
 extern "C" bool MikageKRKRSetForeground(bool value)
 {
+    DiagnosticScriptTraceScope traceScope;
     MikageKRKRLogMessage("audio", 3, value ? "foreground.resume.requested" : "foreground.suspend.requested");
     try {
         if (foreground == value)
             return true;
+        krkrsdl3::TVPInvalidatePresentation(value ? "host.foreground" : "host.background");
         if (!value) {
+            // The engine's idle compact now saves system variables at most
+            // once a minute. iOS may terminate a backgrounded app without
+            // onClose, so persist them here unless script is mid-execution.
+            if (running && !stepDepth)
+                TVPDoSaveSystemVariables();
             foreground = false;
             if (Application)
                 Application->NotifyActiveEvent(eTVPActiveEvent::onDeactive);
@@ -482,6 +776,219 @@ extern "C" bool MikageKRKRGetStats(MikageKRKRStats *stats)
     auto* backend = krkrsdl3::TVPGetRenderBackend();
     stats->gpuSubmissionTimeMilliseconds = backend ? backend->GetGpuSubmissionTimeMilliseconds() : -1.0;
     stats->presentationWaitTimeMilliseconds = backend ? backend->GetPresentationWaitTimeMilliseconds() : -1.0;
+    auto layers = TVPGetMetalLayerRenderStats();
+    stats->gpuLayerComposition = TVPMetalLayerCompositionActive() ? 1 : 0;
+    stats->gpuLayerOperations = layers.gpuOperations;
+    stats->layerCPUFallbacks = layers.cpuFallbacks;
+    stats->layerUploadedBytes = layers.uploadedBytes;
+    stats->layerGammaLUTUploads = layers.gammaLUTUploads;
+    stats->layerGammaLUTUploadedBytes = layers.gammaLUTUploadedBytes;
+    stats->layerPsTableUploads = layers.psTableUploads;
+    stats->layerPsTableUploadedBytes = layers.psTableUploadedBytes;
+    stats->layerReadbackBytes = layers.readbackBytes;
+    stats->layerGPUResidentBytes = layers.gpuResidentBytes;
+    stats->layerCPUCacheBytes = layers.cpuCacheBytes;
+    stats->layerPinnedCPUTextures = layers.pinnedCPUTextures;
+    const auto readbackIndex = [](TVPLayerReadbackSource source) {
+        return static_cast<int>(source);
+    };
+    stats->layerReadbackLockBytes =
+        layers.readbackBytesBySource[readbackIndex(TVPLayerReadbackSource::Lock)];
+    stats->layerReadbackLockCount =
+        layers.readbackCountBySource[readbackIndex(TVPLayerReadbackSource::Lock)];
+    stats->layerReadbackFallbackBytes =
+        layers.readbackBytesBySource[readbackIndex(TVPLayerReadbackSource::Fallback)];
+    stats->layerReadbackFallbackCount =
+        layers.readbackCountBySource[readbackIndex(TVPLayerReadbackSource::Fallback)];
+    stats->layerReadbackPersistentBytes =
+        layers.readbackBytesBySource[readbackIndex(TVPLayerReadbackSource::Persistent)];
+    stats->layerReadbackPersistentCount =
+        layers.readbackCountBySource[readbackIndex(TVPLayerReadbackSource::Persistent)];
+    stats->layerReadbackPixelsBytes =
+        layers.readbackBytesBySource[readbackIndex(TVPLayerReadbackSource::Pixels)];
+    stats->layerReadbackPixelsCount =
+        layers.readbackCountBySource[readbackIndex(TVPLayerReadbackSource::Pixels)];
+    stats->layerReadbackDetachBytes =
+        layers.readbackBytesBySource[readbackIndex(TVPLayerReadbackSource::Detach)];
+    stats->layerReadbackDetachCount =
+        layers.readbackCountBySource[readbackIndex(TVPLayerReadbackSource::Detach)];
+    stats->layerReadbackPointBytes =
+        layers.readbackBytesBySource[readbackIndex(TVPLayerReadbackSource::Point)];
+    stats->layerReadbackPointCount =
+        layers.readbackCountBySource[readbackIndex(TVPLayerReadbackSource::Point)];
+    stats->layerPointCacheHits = layers.pointCacheHits;
+    stats->layerPointCacheMisses = layers.pointCacheMisses;
+
+    const auto fallbackRoleIndex = [](TVPLayerFallbackReadbackRole role) {
+        return static_cast<int>(role);
+    };
+    stats->layerFallbackTargetReadbackBytes =
+        layers.fallbackReadbackBytesByRole[fallbackRoleIndex(TVPLayerFallbackReadbackRole::Target)];
+    stats->layerFallbackTargetReadbackCount =
+        layers.fallbackReadbackCountByRole[fallbackRoleIndex(TVPLayerFallbackReadbackRole::Target)];
+    stats->layerFallbackSourceReadbackBytes =
+        layers.fallbackReadbackBytesByRole[fallbackRoleIndex(TVPLayerFallbackReadbackRole::Source)];
+    stats->layerFallbackSourceReadbackCount =
+        layers.fallbackReadbackCountByRole[fallbackRoleIndex(TVPLayerFallbackReadbackRole::Source)];
+    stats->layerFallbackReferenceReadbackBytes =
+        layers.fallbackReadbackBytesByRole[fallbackRoleIndex(TVPLayerFallbackReadbackRole::Reference)];
+    stats->layerFallbackReferenceReadbackCount =
+        layers.fallbackReadbackCountByRole[fallbackRoleIndex(TVPLayerFallbackReadbackRole::Reference)];
+
+    const auto rejectIndex = [](TVPLayerGPURejectReason reason) {
+        return static_cast<int>(reason);
+    };
+    stats->layerGPURejectTargetUnavailable =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::TargetUnavailable)];
+    stats->layerGPURejectTargetCPUResident =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::TargetCPUResident)];
+    stats->layerGPURejectMultipleInputs =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::MultipleInputs)];
+    stats->layerGPURejectUnsupportedMethod =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::UnsupportedMethod)];
+    stats->layerGPURejectUnsupportedStretch =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::UnsupportedStretch)];
+    stats->layerGPURejectInvalidOpacity =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::InvalidOpacity)];
+    stats->layerGPURejectSourceUnavailable =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::SourceUnavailable)];
+    stats->layerGPURejectSourceFormat =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::SourceFormat)];
+    stats->layerGPURejectInvalidGeometry =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::InvalidGeometry)];
+    stats->layerGPURejectUnsupportedKind =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::UnsupportedKind)];
+    stats->layerGPURejectAlphaTables =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::AlphaTables)];
+    stats->layerGPURejectPsTables =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::PsTables)];
+    stats->layerGPURejectAffineAlias =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::AffineAlias)];
+    stats->layerGPURejectPerspectiveAlias =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::PerspectiveAlias)];
+    stats->layerGPURejectBackendFailure =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::BackendFailure)];
+    stats->layerGPURejectTriangles =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::Triangles)];
+    stats->layerGPURejectPerspective =
+        layers.gpuRejectCountByReason[rejectIndex(TVPLayerGPURejectReason::Perspective)];
+
+    const auto multipleInputMethods = TVPGetMetalLayerMultipleInputMethodSummary();
+    const auto unsupportedMethods = TVPGetMetalLayerUnsupportedMethodSummary();
+    std::strncpy(stats->layerMultipleInputMethods, multipleInputMethods.c_str(),
+                 sizeof(stats->layerMultipleInputMethods) - 1);
+    std::strncpy(stats->layerUnsupportedMethods, unsupportedMethods.c_str(),
+                 sizeof(stats->layerUnsupportedMethods) - 1);
+
+    const auto emoteCapture = krkrsdl3::TVPGetEmoteCaptureStats();
+    stats->emoteCaptureCalls = emoteCapture.calls;
+    stats->emoteCaptureCPUFallbacks = emoteCapture.cpuFallbacks;
+    stats->emoteCaptureCPUBytes = emoteCapture.cpuBytes;
+    stats->emoteCaptureGPUCopies = emoteCapture.gpuCopies;
+    stats->emoteCaptureGPUBytes = emoteCapture.gpuBytes;
+    stats->emoteCaptureSkipped = emoteCapture.skipped;
+    stats->emoteCaptureRegionPixels = emoteCapture.regionPixels;
+    stats->emoteCaptureFullPixels = emoteCapture.fullPixels;
+    const auto emotePerf = emoteplayer::performanceStats();
+    stats->emoteNodeCacheHits = emotePerf.nodeCacheHits;
+    stats->emoteNodeCacheMisses = emotePerf.nodeCacheMisses;
+    stats->emoteShapeCacheHits = emotePerf.shapeCacheHits;
+    stats->emoteMeshCacheHits = emotePerf.meshCacheHits;
+    stats->emoteDrawListRebuilds = emotePerf.drawListRebuilds;
+    stats->emoteCaptureKnownBounds = emotePerf.captureKnownBounds;
+    stats->emoteCaptureUnknownBounds = emotePerf.captureUnknownBounds;
+    stats->emoteCaptureCOWFallbacks = emotePerf.captureCOWFallbacks;
+    stats->emoteAlphaRequests = emotePerf.alphaRequests;
+    stats->emoteAlphaCacheHits = emotePerf.alphaCacheHits;
+    stats->emoteAlphaPendingEvents = emotePerf.alphaPendingEvents;
+    stats->emoteAlphaReadBytes = emotePerf.alphaReadBytes;
+    stats->emoteAlphaFailures = emotePerf.alphaFailures;
+    stats->emoteUISyncReads = emotePerf.uiSyncReads;
+    stats->emoteUISyncWaitNS = emotePerf.uiSyncWaitNS;
+    stats->emoteCaptureExperimentalBoundsKnown = emotePerf.captureExperimentalBoundsKnown;
+    stats->emoteCaptureExperimentalBoundsUnknown = emotePerf.captureExperimentalBoundsUnknown;
+    stats->emoteCaptureExperimentalBoundsPixels = emotePerf.captureExperimentalBoundsPixels;
+    stats->emoteCaptureExperimentalBoundsNS = emotePerf.captureExperimentalBoundsNS;
+    stats->emoteCaptureUpdatePixels = emotePerf.captureUpdatePixels;
+    stats->emoteCaptureUpdateFullPixels = emotePerf.captureUpdateFullPixels;
+    stats->emoteLocalPoseCacheHits = emotePerf.localPoseCacheHits;
+    stats->emoteLocalPoseCacheMisses = emotePerf.localPoseCacheMisses;
+    stats->emoteCaptureRequests = emotePerf.captureRequests;
+    stats->emoteCaptureFullCopies = emotePerf.captureFullCopies;
+    stats->emoteCaptureRegionCopies = emotePerf.captureRegionCopies;
+    stats->emoteCaptureRegionFallbacks = emotePerf.captureRegionFallbacks;
+    stats->emoteCaptureBoundsNS = emotePerf.captureBoundsNS;
+
+    const auto profile = krkrsdl3::TVPGetRuntimeProfileStats();
+    stats->emoteProgressCalls = profile.emoteProgressCalls;
+    stats->emoteProgressTimeNS = profile.emoteProgressTimeNS;
+    stats->emotePrepareCalls = profile.emotePrepareCalls;
+    stats->emotePrepareTimeNS = profile.emotePrepareTimeNS;
+    stats->emoteDrawCalls = profile.emoteDrawCalls;
+    stats->emoteDrawTimeNS = profile.emoteDrawTimeNS;
+    stats->emoteCaptureProfileCalls = profile.emoteCaptureProfileCalls;
+    stats->emoteCaptureTimeNS = profile.emoteCaptureTimeNS;
+    stats->emotePrepareTransformTimeNS = profile.emotePrepareTransformTimeNS;
+    stats->emotePrepareMotionProgressTimeNS = profile.emotePrepareMotionProgressTimeNS;
+    stats->emotePrepareSnapshotTimeNS = profile.emotePrepareSnapshotTimeNS;
+    stats->emoteNodeProgressCalls = profile.emoteNodeProgressCalls;
+    stats->emoteNodeProgressTimeNS = profile.emoteNodeProgressTimeNS;
+    stats->emoteSubmotionCreates = profile.emoteSubmotionCreates;
+    stats->emoteSubmotionRebuildTimeNS = profile.emoteSubmotionRebuildTimeNS;
+    stats->emoteShapeBuildCalls = profile.emoteShapeBuildCalls;
+    stats->emoteShapeBuildTimeNS = profile.emoteShapeBuildTimeNS;
+    stats->emoteShapeVertices = profile.emoteShapeVertices;
+    stats->emoteMeshBuildCalls = profile.emoteMeshBuildCalls;
+    stats->emoteMeshBuildTimeNS = profile.emoteMeshBuildTimeNS;
+    stats->emoteMeshVerticesBuilt = profile.emoteMeshVerticesBuilt;
+    stats->emoteDeformedVerticesBuilt = profile.emoteDeformedVerticesBuilt;
+    stats->emoteGPUDeformDraws = profile.emoteGPUDeformDraws;
+    stats->emoteGPUDeformVertices = profile.emoteGPUDeformVertices;
+    stats->emoteRenderSteps = profile.emoteRenderSteps;
+    stats->emotePlayerDraws = profile.emotePlayerDraws;
+    stats->emoteDistinctPlayerDraws = profile.emoteDistinctPlayerDraws;
+    stats->emoteRepeatedPlayerDraws = profile.emoteRepeatedPlayerDraws;
+    stats->emoteDistinctTargets = profile.emoteDistinctTargets;
+    stats->emoteMaxDrawsPerStep = profile.emoteMaxDrawsPerStep;
+    stats->emoteMaxPlayersPerStep = profile.emoteMaxPlayersPerStep;
+    stats->emoteMaxDrawsPerPlayerStep = profile.emoteMaxDrawsPerPlayerStep;
+    stats->meshDrawCalls = profile.meshDrawCalls;
+    stats->meshVertices = profile.meshVertices;
+    stats->meshIndices = profile.meshIndices;
+    stats->meshCPUTimeNS = profile.meshCPUTimeNS;
+    stats->meshValidationTimeNS = profile.meshValidationTimeNS;
+    stats->meshBufferAllocations = profile.meshBufferAllocations;
+    stats->meshBufferBytes = profile.meshBufferBytes;
+    stats->meshBufferAllocationTimeNS = profile.meshBufferAllocationTimeNS;
+    stats->metalSubmits = profile.metalSubmits;
+    stats->metalSyncWaits = profile.metalSyncWaits;
+    stats->metalSyncWaitTimeNS = profile.metalSyncWaitTimeNS;
+    stats->metalQueueWaitTimeNS = profile.metalQueueWaitTimeNS;
+    stats->metalRingBytes = profile.metalRingBytes;
+    stats->metalRingSuballocs = profile.metalRingSuballocs;
+    stats->metalRingSuballocTimeNS = profile.metalRingSuballocTimeNS;
+    stats->metalRingWraps = profile.metalRingWraps;
+    stats->metalRingStallTimeNS = profile.metalRingStallTimeNS;
+    stats->metalRingHighWaterBytes = profile.metalRingHighWaterBytes;
+    stats->metalRingFallbackAllocations = profile.metalRingFallbackAllocations;
+    stats->metalRingFallbackBytes = profile.metalRingFallbackBytes;
+    stats->stepEventTimeNS = stepEventTimeNS;
+    stats->stepIterateTimeNS = stepIterateTimeNS;
+    stats->metalRenderEncoders = profile.metalRenderEncoders;
+    stats->metalComputeEncoders = profile.metalComputeEncoders;
+    stats->metalBlitEncoders = profile.metalBlitEncoders;
+    stats->metalLayerRectSnapshots = profile.metalLayerRectSnapshots;
+    stats->metalLayerRectSnapshotBytes = profile.metalLayerRectSnapshotBytes;
+    stats->metalSurfaceUploadBytes = profile.metalSurfaceUploadBytes;
+    stats->emoteMaskClears = profile.emoteMaskClears;
+    stats->emoteMaskDraws = profile.emoteMaskDraws;
+    stats->emoteUniqueMaskGroups = profile.emoteUniqueMaskGroups;
+    stats->emoteLayerGPUCopies = profile.emoteLayerGPUCopies;
+    stats->emoteLayerGPUCopyBytes = profile.emoteLayerGPUCopyBytes;
+    stats->emoteLayerCPUReadbacks = profile.emoteLayerCPUReadbacks;
+    stats->emoteLayerCPUReadbackBytes = profile.emoteLayerCPUReadbackBytes;
+    stats->emoteLayerCPUReadbackTimeNS = profile.emoteLayerCPUReadbackTimeNS;
+
     if (SDL_Window *window = MikageKRKRGetSDLWindow()) {
         int width = 0, height = 0;
         SDL_GetWindowSizeInPixels(window, &width, &height);
@@ -490,6 +997,140 @@ extern "C" bool MikageKRKRGetStats(MikageKRKRStats *stats)
     }
     std::strncpy(stats->renderer, activeRenderer.c_str(), sizeof(stats->renderer) - 1);
     return true;
+}
+
+extern "C" bool MikageKRKRTakeLayerWorkProfile(MikageKRKRLayerWorkProfile *profile)
+{
+    krkrsdl3::layer_work::lastSuccessfulProfileWindowID=0;
+    krkrsdl3::layer_work::lastSuccessfulProfileGeneration=0;
+    if(!running || !profile || !diagnosticCallback.load(std::memory_order_acquire)) return false;
+    std::memset(profile,0,sizeof(*profile));
+    try {
+        const auto sample=krkrsdl3::layer_work::Take();
+        profile->intervalNS=sample.intervalNS;
+        // Bounds are part of the wire contract. Never emit a silently cut row.
+        if(sample.stages.size()>=sizeof(profile->stages) || sample.transfers.size()>=sizeof(profile->transfers) ||
+           sample.transferOrigins.size()>=sizeof(profile->transferOrigins) || sample.originOverflow.size()>=sizeof(profile->originOverflow) ||
+           sample.transitionProfiles.size()>=sizeof(profile->transitionProfiles) || sample.transitionOverflow.size()>=sizeof(profile->transitionOverflow) ||
+           sample.shrinkProfiles.size()>=sizeof(profile->shrinkProfiles) || sample.shrinkOverflow.size()>=sizeof(profile->shrinkOverflow) ||
+           sample.shrinkReadWaitSampleCount>krkrsdl3::layer_work::MaxReadWaitSamples ||
+           sample.frameSampleCount>krkrsdl3::layer_work::MaxFrameSamples) return false;
+        std::memcpy(profile->stages,sample.stages.c_str(),sample.stages.size()+1);
+        std::memcpy(profile->transfers,sample.transfers.c_str(),sample.transfers.size()+1);
+        profile->amvDecodedFrames=sample.decodedFrames;
+        profile->amvDecodedBytes=sample.decodedBytes;
+        profile->workProfileVersion=sample.workProfileVersion;
+        std::memcpy(profile->transferOrigins,sample.transferOrigins.c_str(),sample.transferOrigins.size()+1);
+        std::memcpy(profile->originOverflow,sample.originOverflow.c_str(),sample.originOverflow.size()+1);
+        profile->frameSampleCount=sample.frameSampleCount;
+        std::copy_n(sample.frameIntervalNS.data(),sample.frameSampleCount,profile->frameIntervalNS);
+        std::copy_n(sample.frameCpuWallNS.data(),sample.frameSampleCount,profile->frameCpuWallNS);
+        profile->frameSamplesDropped=sample.frameSamplesDropped;
+        profile->transitionProfileVersion=sample.transitionProfileVersion;
+        std::memcpy(profile->transitionProfiles,sample.transitionProfiles.c_str(),sample.transitionProfiles.size()+1);
+        profile->transitionProfilesDropped=sample.transitionProfilesDropped;
+        std::memcpy(profile->transitionOverflow,sample.transitionOverflow.c_str(),sample.transitionOverflow.size()+1);
+        profile->shrinkProfileVersion=sample.shrinkProfileVersion;
+        std::memcpy(profile->shrinkProfiles,sample.shrinkProfiles.c_str(),sample.shrinkProfiles.size()+1);
+        profile->shrinkProfilesDropped=sample.shrinkProfilesDropped;
+        std::memcpy(profile->shrinkOverflow,sample.shrinkOverflow.c_str(),sample.shrinkOverflow.size()+1);
+        profile->shrinkReadWaitSampleCount=sample.shrinkReadWaitSampleCount;
+        std::copy_n(sample.shrinkReadWaitSamplesNS.data(),sample.shrinkReadWaitSampleCount,profile->shrinkReadWaitSamplesNS);
+        profile->shrinkReadWaitSamplesDropped=sample.shrinkReadWaitSamplesDropped;
+        krkrsdl3::layer_work::lastSuccessfulProfileWindowID=sample.spanRouteWindowID;
+        krkrsdl3::layer_work::lastSuccessfulProfileGeneration=sample.spanRouteGeneration;
+        return true;
+    } catch(...) { return false; }
+}
+
+extern "C" uint64_t MikageKRKRLastLayerWorkProfileWindowID(void)
+{
+    if(!krkrsdl3::layer_work::enabled.load(std::memory_order_relaxed) ||
+       krkrsdl3::layer_work::lastSuccessfulProfileGeneration!=
+           krkrsdl3::layer_work::generation.load(std::memory_order_relaxed)) return 0;
+    return krkrsdl3::layer_work::lastSuccessfulProfileWindowID;
+}
+
+extern "C" const char *MikageKRKRLayerWorkProfileOrigins(const MikageKRKRLayerWorkProfile *profile)
+{
+    return profile ? profile->transferOrigins : nullptr;
+}
+
+extern "C" const char *MikageKRKRLayerWorkProfileTransitions(const MikageKRKRLayerWorkProfile *profile)
+{
+    return profile && profile->transitionProfileVersion==1 ? profile->transitionProfiles : nullptr;
+}
+
+extern "C" const char *MikageKRKRLayerWorkProfileTransitionOverflow(const MikageKRKRLayerWorkProfile *profile)
+{
+    return profile && profile->transitionProfileVersion==1 ? profile->transitionOverflow : nullptr;
+}
+
+extern "C" const uint64_t *MikageKRKRLayerWorkProfileFrameIntervals(const MikageKRKRLayerWorkProfile *profile)
+{
+    return profile && profile->frameSampleCount <= krkrsdl3::layer_work::MaxFrameSamples ? profile->frameIntervalNS : nullptr;
+}
+
+extern "C" const uint64_t *MikageKRKRLayerWorkProfileFrameCpuWall(const MikageKRKRLayerWorkProfile *profile)
+{
+    return profile && profile->frameSampleCount <= krkrsdl3::layer_work::MaxFrameSamples ? profile->frameCpuWallNS : nullptr;
+}
+
+extern "C" const char *MikageKRKRLayerWorkProfileShrinks(const MikageKRKRLayerWorkProfile *profile)
+{
+    return profile && profile->shrinkProfileVersion==1 &&
+        std::memchr(profile->shrinkProfiles,0,sizeof(profile->shrinkProfiles)) ? profile->shrinkProfiles : nullptr;
+}
+
+extern "C" const char *MikageKRKRLayerWorkProfileShrinkOverflow(const MikageKRKRLayerWorkProfile *profile)
+{
+    return profile && profile->shrinkProfileVersion==1 &&
+        std::memchr(profile->shrinkOverflow,0,sizeof(profile->shrinkOverflow)) ? profile->shrinkOverflow : nullptr;
+}
+
+extern "C" const uint64_t *MikageKRKRLayerWorkProfileShrinkReadWait(const MikageKRKRLayerWorkProfile *profile)
+{
+    return profile && profile->shrinkProfileVersion==1 && profile->shrinkReadWaitSampleCount<=krkrsdl3::layer_work::MaxReadWaitSamples
+        ? profile->shrinkReadWaitSamplesNS : nullptr;
+}
+
+extern "C" bool MikageKRKRTakeLayerTriangleProfile(MikageKRKRLayerTriangleProfile *profile)
+{
+    if (!running || !profile || !diagnosticCallback.load(std::memory_order_acquire))
+        return false;
+    std::memset(profile, 0, sizeof(*profile));
+    try {
+        const auto sample = TVPTakeMetalLayerTriangleProfile();
+        const auto& s = sample.stats;
+        profile->intervalNS = s.intervalNS;
+        profile->calls = s.calls;
+        profile->triangleCount = s.triangleCount;
+        profile->gpuCalls = s.gpuCalls;
+        profile->gpuPixels = s.gpuPixels;
+        profile->clipPixels = s.clipPixels;
+        profile->maxClipPixels = s.maxClipPixels;
+        profile->maxTargetPixels = s.maxTargetPixels;
+        profile->fullSurfaceCalls = s.fullSurfaceCalls;
+        profile->target1920x1080Calls = s.target1920x1080Calls;
+        profile->targetReadbackBytes = s.targetReadbackBytes;
+        profile->sourceReadbackBytes = s.sourceReadbackBytes;
+        profile->referenceReadbackBytes = s.referenceReadbackBytes;
+        profile->cpuTimeNS = s.cpuTimeNS;
+        profile->maxCpuTimeNS = s.maxCpuTimeNS;
+        profile->softwareTimeNS = s.softwareTimeNS;
+        profile->maxSoftwareTimeNS = s.maxSoftwareTimeNS;
+        profile->count2Calls = s.count2Calls;
+        profile->singleInputCalls = s.singleInputCalls;
+        profile->referenceCalls = s.referenceCalls;
+        profile->sourceTargetAliasCalls = s.sourceTargetAliasCalls;
+        std::strncpy(profile->methods, sample.methods.c_str(), sizeof(profile->methods) - 1);
+        std::strncpy(profile->targetSizes, sample.targetSizes.c_str(), sizeof(profile->targetSizes) - 1);
+        std::strncpy(profile->sources, sample.sources.c_str(), sizeof(profile->sources) - 1);
+        std::strncpy(profile->stretchModes, sample.stretchModes.c_str(), sizeof(profile->stretchModes) - 1);
+        return true;
+    } catch (...) {
+        return false;
+    }
 }
 
 extern "C" bool MikageKRKRIsRunning(void)
