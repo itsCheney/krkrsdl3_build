@@ -11,6 +11,9 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/cmake_environ.txt)
 set(KRKRSDL_SRC
 	${KRKRSDL_TJS2_SRC}
     ${KRKRSDL_ENVIRON_CONSOLE_SRC}
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/plugins/Kirikiroid2/7zip/Sha256.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/plugins/Kirikiroid2/7zip/Sha256Opt.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/plugins/Kirikiroid2/7zip/CpuArch.c
     )
 
 #

@@ -21,7 +21,17 @@ Metal presentation with software composition.
   ResizeRGBA, including integer clipping adjustments and edge extrapolation.
   Single-pixel dimensions now safely replicate their only row/column. Negative
   extrapolation uses a defined ARM-compatible unsigned conversion.
-- Other samplers, affine/perspective transforms, special text and transition
+- Copy affine quads (two triangles, one RGBA source, integer forward source
+  rectangle): nearest / fast linear / linear. Axis-aligned operations preserve
+  the software integer-rectangle path; rotations/shears preserve its clip-wide
+  inverse warp, transparent border, source +1 boundary/crop and pixel centers.
+  Metal uses split-float inverse coefficients and explicit byte interpolation.
+  Reference is ignored by Copy; aliased sources use GPU snapshots. There is no
+  CPU pixel transfer or per-operation submission/wait on the successful path.
+  `layerTriangleProfile.gpuCalls/gpuPixels` count successful interval dispatches;
+  its original fields continue to measure software fallbacks only.
+- Other samplers, affine methods, mirrored axis-aligned quads, non-affine and
+  fractional/reversed source rectangles, perspective transforms, special text and transition
   methods execute the same canonical software methods through scoped views.
   Scaled reversed source rectangles retain software fallback.
 
@@ -54,6 +64,16 @@ CPU methods currently read complete operand textures once per content version.
 The backend additionally exposes tightly packed local RGBA/R8 readback and
 validates region bounds. No permanent CPU mirror is created for GPU-only textures.
 
+Single-pixel queries use a bounded sparse cache. Rectangle writes invalidate only
+samples inside the written area; alpha-only hit tests also retain exact alpha
+through RGB-only/HDA operations. Alpha-changing operations, unknown GPU writes
+and full Emote captures invalidate affected samples. CPU write uploads invalidate
+samples taken before an outstanding pointer was modified. An uncached query still
+reads the current GPU pixels synchronously; hit testing never substitutes an old
+animation frame. ClearTarget retains its render encoder so the following Emote
+mesh or mask draws share the clear pass; transfers, compute and target changes
+close that encoder in order.
+
 Layers, character/cache resources and deferred deletions are cleared before
 manager unbinding and backend shutdown. Any intentionally retained texture is
 detached into CPU authority before its backend is destroyed. GPU resources never
@@ -62,6 +82,14 @@ escape into the process-lifetime method cache.
 HUD/diagnostics report Layer composition separately from presentation, with
 cumulative GPU operations, CPU fallbacks, upload/readback bytes, GPU resident
 bytes, CPU cache bytes and pinned CPU texture count.
+
+Steps taking at least 50 ms produce a `runtime.slowFrames` summary at most once
+per statistics window (one second). Its event/iterate durations and event count
+belong to the same worst step, and include blocking waits. Slow Emote load/play
+calls emit `emote.slowOperation` at most once per second per operation type;
+resource-load reports separate file loading from root TJS object construction,
+including cache hits. These timings supplement rather than replace device GPU
+profiling.
 
 ## Validation
 
@@ -75,7 +103,11 @@ The matrix covers all supported methods/opacity endpoints, glyph coverage,
 subrectangles, clipping during resize, dimensions of one, sampling, flips and
 self-copy overlap. It checks exact copy/fill bytes and blend/linear error <= 1,
 GPU-to-CPU-to-GPU interleaving, cache reuse, raw pointer writes, independent
-textures, unsupported methods/transitions/affine/perspective, three session
+textures, unsupported methods/transitions/affine/perspective, 369 exact Copy
+affine comparisons (transforms, clipping, source subrectangles, nearest/linear,
+alpha, source/target aliases and single-pixel dimensions), a 24-call full-HD
+resident triangle burst, independent ignored references and diagnostic bridge
+reset/disable behavior, three session
 unbinds, and deliberately retained textures. A 120-operation ordinary Layer and 320-glyph text
 workload reports software CPU wall time and GPU encoding wall time, checks GPU
 execution and zero CPU readbacks until explicit final validation. Native tests also verify texture-alias presentation
