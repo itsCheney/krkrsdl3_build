@@ -918,6 +918,7 @@ extern "C" bool MikageKRKRGetStats(MikageKRKRStats *stats)
     stats->emoteLayerCPUReadbacks = profile.emoteLayerCPUReadbacks;
     stats->emoteLayerCPUReadbackBytes = profile.emoteLayerCPUReadbackBytes;
     stats->emoteLayerCPUReadbackTimeNS = profile.emoteLayerCPUReadbackTimeNS;
+    stats->emoteLayerDirectDraws = profile.emoteLayerDirectDraws;
 
     if (SDL_Window *window = MikageKRKRGetSDLWindow()) {
         int width = 0, height = 0;

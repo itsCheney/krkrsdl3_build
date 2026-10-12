@@ -187,6 +187,7 @@ typedef struct MikageKRKRStats {
     uint64_t emoteLayerCPUReadbacks;
     uint64_t emoteLayerCPUReadbackBytes;
     uint64_t emoteLayerCPUReadbackTimeNS;
+    uint64_t emoteLayerDirectDraws;
     uint64_t emoteCaptureSkipped;
     uint64_t emoteCaptureRegionPixels;
     uint64_t emoteCaptureFullPixels;
