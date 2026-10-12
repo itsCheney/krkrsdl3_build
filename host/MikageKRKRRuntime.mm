@@ -136,6 +136,8 @@ static bool applyEmoteAnimationModeForStart()
     for (unsigned i = 0; i < 7; ++i)
         if (!SDL_SetHintWithPriority(hints[i], flags & (1u << i) ? "1" : "0", SDL_HINT_OVERRIDE))
             return false;
+    // Hot draw/composition paths read this snapshot instead of SDL hints.
+    emoteplayer::refreshPerformanceFlags();
     emoteplayer::resetPerformanceStats();
     char optionsLog[64];
     std::snprintf(optionsLog, sizeof(optionsLog), "performance.options flags=%u", flags);
