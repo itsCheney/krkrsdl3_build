@@ -115,7 +115,7 @@ extern "C" void MikageKRKRSetExperimentalEmote(bool enabled)
 }
 extern "C" void MikageKRKRSetEmotePerformanceOptions(uint32_t flags)
 {
-    emotePerformanceOptions.store(flags & 127u, std::memory_order_relaxed);
+    emotePerformanceOptions.store(flags & 31u, std::memory_order_relaxed);
 }
 
 static bool applyEmoteAnimationModeForStart()
@@ -124,16 +124,16 @@ static bool applyEmoteAnimationModeForStart()
     if (!SDL_SetHintWithPriority("MIKAGE_EMOTE_ANIMATION_MODE",
         enabled ? "integrated" : "legacy", SDL_HINT_OVERRIDE)) return false;
     MikageKRKRLogMessage("emote", 3, enabled ? "animation.integrated" : "animation.legacy");
+    // Bits 5 and 6 (experimental bounds, local pose cache) were removed.
     const char* hints[] = {"MIKAGE_EMOTE_NODE_CACHE", "MIKAGE_EMOTE_CAPTURE_CACHE",
-        "MIKAGE_EMOTE_LOCAL_UPDATE", "MIKAGE_EMOTE_REGION_COPY", "MIKAGE_EMOTE_ASYNC_ALPHA",
-        "MIKAGE_EMOTE_EXPERIMENTAL_BOUNDS", "MIKAGE_EMOTE_LOCAL_POSE_CACHE"};
+        "MIKAGE_EMOTE_LOCAL_UPDATE", "MIKAGE_EMOTE_REGION_COPY", "MIKAGE_EMOTE_ASYNC_ALPHA"};
     uint32_t flags = emotePerformanceOptions.load(std::memory_order_relaxed);
 #if TARGET_OS_SIMULATOR
     // No drawable-presented acknowledgement exists in the simulator SDK.
     // Keep ordinary input rather than publish an unconfirmed alpha frame.
     flags &= ~(1u << 4);
 #endif
-    for (unsigned i = 0; i < 7; ++i)
+    for (unsigned i = 0; i < sizeof(hints) / sizeof(*hints); ++i)
         if (!SDL_SetHintWithPriority(hints[i], flags & (1u << i) ? "1" : "0", SDL_HINT_OVERRIDE))
             return false;
     // Hot draw/composition paths read this snapshot instead of SDL hints.
@@ -907,14 +907,8 @@ extern "C" bool MikageKRKRGetStats(MikageKRKRStats *stats)
     stats->emoteAlphaFailures = emotePerf.alphaFailures;
     stats->emoteUISyncReads = emotePerf.uiSyncReads;
     stats->emoteUISyncWaitNS = emotePerf.uiSyncWaitNS;
-    stats->emoteCaptureExperimentalBoundsKnown = emotePerf.captureExperimentalBoundsKnown;
-    stats->emoteCaptureExperimentalBoundsUnknown = emotePerf.captureExperimentalBoundsUnknown;
-    stats->emoteCaptureExperimentalBoundsPixels = emotePerf.captureExperimentalBoundsPixels;
-    stats->emoteCaptureExperimentalBoundsNS = emotePerf.captureExperimentalBoundsNS;
     stats->emoteCaptureUpdatePixels = emotePerf.captureUpdatePixels;
     stats->emoteCaptureUpdateFullPixels = emotePerf.captureUpdateFullPixels;
-    stats->emoteLocalPoseCacheHits = emotePerf.localPoseCacheHits;
-    stats->emoteLocalPoseCacheMisses = emotePerf.localPoseCacheMisses;
     stats->emoteCaptureRequests = emotePerf.captureRequests;
     stats->emoteCaptureFullCopies = emotePerf.captureFullCopies;
     stats->emoteCaptureRegionCopies = emotePerf.captureRegionCopies;

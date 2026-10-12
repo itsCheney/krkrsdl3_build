@@ -209,14 +209,8 @@ typedef struct MikageKRKRStats {
     uint64_t emoteAlphaFailures;
     uint64_t emoteUISyncReads;
     uint64_t emoteUISyncWaitNS;
-    uint64_t emoteCaptureExperimentalBoundsKnown;
-    uint64_t emoteCaptureExperimentalBoundsUnknown;
-    uint64_t emoteCaptureExperimentalBoundsPixels;
-    uint64_t emoteCaptureExperimentalBoundsNS;
     uint64_t emoteCaptureUpdatePixels;
     uint64_t emoteCaptureUpdateFullPixels;
-    uint64_t emoteLocalPoseCacheHits;
-    uint64_t emoteLocalPoseCacheMisses;
     uint64_t emoteCaptureRequests;
     uint64_t emoteCaptureFullCopies;
     uint64_t emoteCaptureRegionCopies;
