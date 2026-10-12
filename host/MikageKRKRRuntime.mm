@@ -61,6 +61,11 @@ void diagnosticSDLOutput(void *, int category, SDL_LogPriority priority, const c
 void TVPSetSkippedMovies(const char *names);
 // Defined in the core with C++ linkage; runs kag.saveSystemVariables.
 void TVPDoSaveSystemVariables();
+// Defined in the core (TVPSystem.cpp). With TVPHostOwnsProcess set,
+// System.exit sets TVPTerminated and unwinds here with eTJSSilent instead of
+// calling exit(), so the session returns to the library.
+extern bool TVPHostOwnsProcess;
+extern bool TVPTerminated;
 
 extern "C" void MikageKRKRLogMessage(const char *source, int32_t level, const char *message)
 {
@@ -511,6 +516,7 @@ extern "C" bool MikageKRKRStart(const char *gamePath,
             appState = nullptr;
 
             traceScope.BeginSession();
+            TVPHostOwnsProcess = true;
             SDL_AppResult result = SDL_AppInit(
                 &appState,
                 static_cast<int>(argv.size()),
@@ -533,6 +539,10 @@ extern "C" bool MikageKRKRStart(const char *gamePath,
             } else {
                 TVPSetAudioSuspended(false);
             }
+        } catch (const eTJSSilent &) {
+            resetAfterStartFailure(TVPTerminated ? "The game exited during startup."
+                                                 : "Silent KRKR exception during startup.");
+            return false;
         } catch (const eTJS &error) {
             resetAfterStartFailure(std::string(error.GetMessage().c_str()));
             return false;
@@ -611,6 +621,11 @@ extern "C" MikageKRKRStepResult MikageKRKRStep(void)
                         eventDuration, iterateDuration, eventCount);
         }
         return finishForResult(result);
+    } catch (const eTJSSilent &) {
+        // System.exit already requested termination: a normal end of game.
+        if (TVPTerminated)
+            return finishForResult(SDL_APP_SUCCESS);
+        finish(SDL_APP_FAILURE, "Silent KRKR exception while stepping.");
     } catch (const eTJS &error) {
         std::string message(error.GetMessage().c_str());
         finish(SDL_APP_FAILURE, message.c_str());
@@ -631,6 +646,11 @@ extern "C" bool MikageKRKRRequestExit(void)
         MikageKRKRLogMessage("bridge", 3, "runtime.userClose.requested");
         TVPMainWindow->RequestUserClose();
         return true;
+    } catch (const eTJSSilent &) {
+        // onCloseQuery called System.exit; the next step finishes the session.
+        if (TVPTerminated)
+            return true;
+        lastError = "Silent KRKR exception requesting close-query.";
     } catch (const eTJS &error) {
         lastError = error.GetMessage().c_str();
     } catch (const std::exception &error) {
@@ -703,6 +723,14 @@ extern "C" bool MikageKRKRSetForeground(bool value)
         lastError.clear();
         MikageKRKRLogMessage("audio", 3, "foreground.resumed");
         return true;
+    } catch (const eTJSSilent &) {
+        // An activation handler called System.exit; the next foreground step
+        // finishes the session normally.
+        if (TVPTerminated) {
+            foreground = value;
+            return true;
+        }
+        lastError = "Silent KRKR exception while changing KRKR foreground state.";
     } catch (const eTJS &error) {
         lastError = error.GetMessage().c_str();
     } catch (const std::exception &error) {
@@ -1112,6 +1140,10 @@ extern "C" bool MikageKRKRCaptureFrame(MikageKRKRCapturedFrame *frame)
             return true;
         } catch (const std::exception &error) {
             SDL_Log("Native screenshot failed: %s", error.what());
+            return false;
+        } catch (...) {
+            // Never let an engine exception cross the C boundary into Swift.
+            SDL_Log("Native screenshot failed: unknown exception");
             return false;
         }
     }
