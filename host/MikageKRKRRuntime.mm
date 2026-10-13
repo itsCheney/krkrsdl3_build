@@ -33,7 +33,6 @@ std::mutex logOutputMutex;
 std::mutex skippedMoviesMutex;
 std::string skippedMovies;
 std::atomic<bool> experimentalEmote{false};
-std::atomic<uint32_t> emotePerformanceOptions{0};
 thread_local bool mirroringKRKRLog = false;
 SDL_LogOutputFunction previousLogOutput = nullptr;
 void *previousLogContext = nullptr;
@@ -62,6 +61,11 @@ void diagnosticSDLOutput(void *, int category, SDL_LogPriority priority, const c
 void TVPSetSkippedMovies(const char *names);
 // Defined in the core with C++ linkage; runs kag.saveSystemVariables.
 void TVPDoSaveSystemVariables();
+// Defined in the core (TVPSystem.cpp). With TVPHostOwnsProcess set,
+// System.exit sets TVPTerminated and unwinds here with eTJSSilent instead of
+// calling exit(), so the session returns to the library.
+extern bool TVPHostOwnsProcess;
+extern bool TVPTerminated;
 
 extern "C" void MikageKRKRLogMessage(const char *source, int32_t level, const char *message)
 {
@@ -113,10 +117,6 @@ extern "C" void MikageKRKRSetExperimentalEmote(bool enabled)
 {
     experimentalEmote.store(enabled, std::memory_order_relaxed);
 }
-extern "C" void MikageKRKRSetEmotePerformanceOptions(uint32_t flags)
-{
-    emotePerformanceOptions.store(flags & 127u, std::memory_order_relaxed);
-}
 
 static bool applyEmoteAnimationModeForStart()
 {
@@ -124,45 +124,9 @@ static bool applyEmoteAnimationModeForStart()
     if (!SDL_SetHintWithPriority("MIKAGE_EMOTE_ANIMATION_MODE",
         enabled ? "integrated" : "legacy", SDL_HINT_OVERRIDE)) return false;
     MikageKRKRLogMessage("emote", 3, enabled ? "animation.integrated" : "animation.legacy");
-    const char* hints[] = {"MIKAGE_EMOTE_NODE_CACHE", "MIKAGE_EMOTE_CAPTURE_CACHE",
-        "MIKAGE_EMOTE_LOCAL_UPDATE", "MIKAGE_EMOTE_REGION_COPY", "MIKAGE_EMOTE_ASYNC_ALPHA",
-        "MIKAGE_EMOTE_EXPERIMENTAL_BOUNDS", "MIKAGE_EMOTE_LOCAL_POSE_CACHE"};
-    uint32_t flags = emotePerformanceOptions.load(std::memory_order_relaxed);
-#if TARGET_OS_SIMULATOR
-    // No drawable-presented acknowledgement exists in the simulator SDK.
-    // Keep ordinary input rather than publish an unconfirmed alpha frame.
-    flags &= ~(1u << 4);
-#endif
-    for (unsigned i = 0; i < 7; ++i)
-        if (!SDL_SetHintWithPriority(hints[i], flags & (1u << i) ? "1" : "0", SDL_HINT_OVERRIDE))
-            return false;
+    // Per-session Emote counters start from zero for each game.
     emoteplayer::resetPerformanceStats();
-    char optionsLog[64];
-    std::snprintf(optionsLog, sizeof(optionsLog), "performance.options flags=%u", flags);
-    MikageKRKRLogMessage("emote", 3, optionsLog);
     return true;
-}
-
-// Leave pointer events in SDL's queue when the alpha-input queue is full.
-// Lifecycle/keyboard/device events remain serviceable, so a blocked GPU cannot
-// prevent quitting, resizing or stopping the session. Pointer FIFO is retained.
-static bool pollKRKREvent(SDL_Event* event)
-{
-    if (!TVPHasPendingLayerPointerBackpressure()) return SDL_PollEvent(event);
-    SDL_PumpEvents();
-    static const std::array<Uint32, 7> pointerTypes = [] {
-        std::array<Uint32, 7> types{{SDL_EVENT_MOUSE_MOTION, SDL_EVENT_MOUSE_BUTTON_DOWN,
-            SDL_EVENT_MOUSE_BUTTON_UP, SDL_EVENT_MOUSE_WHEEL, SDL_EVENT_FINGER_DOWN,
-            SDL_EVENT_FINGER_UP, SDL_EVENT_FINGER_MOTION}};
-        std::sort(types.begin(), types.end());
-        return types;
-    }();
-    Uint32 first = SDL_EVENT_FIRST;
-    for (Uint32 type : pointerTypes) {
-        if (first < type && SDL_PeepEvents(event, 1, SDL_GETEVENT, first, type - 1) > 0) return true;
-        first = type + 1;
-    }
-    return SDL_PeepEvents(event, 1, SDL_GETEVENT, first, SDL_EVENT_LAST) > 0;
 }
 
 #include "TVPApplication.h"
@@ -552,6 +516,7 @@ extern "C" bool MikageKRKRStart(const char *gamePath,
             appState = nullptr;
 
             traceScope.BeginSession();
+            TVPHostOwnsProcess = true;
             SDL_AppResult result = SDL_AppInit(
                 &appState,
                 static_cast<int>(argv.size()),
@@ -574,6 +539,10 @@ extern "C" bool MikageKRKRStart(const char *gamePath,
             } else {
                 TVPSetAudioSuspended(false);
             }
+        } catch (const eTJSSilent &) {
+            resetAfterStartFailure(TVPTerminated ? "The game exited during startup."
+                                                 : "Silent KRKR exception during startup.");
+            return false;
         } catch (const eTJS &error) {
             resetAfterStartFailure(std::string(error.GetMessage().c_str()));
             return false;
@@ -612,7 +581,7 @@ extern "C" MikageKRKRStepResult MikageKRKRStep(void)
         const Uint64 eventsStarted = frameStarted;
         Uint64 eventCount = 0;
         SDL_Event event;
-        while (pollKRKREvent(&event)) {
+        while (SDL_PollEvent(&event)) {
             ++eventCount;
             switch (event.type) {
                 case SDL_EVENT_WINDOW_EXPOSED:
@@ -639,13 +608,6 @@ extern "C" MikageKRKRStepResult MikageKRKRStep(void)
         if (!foreground)
             return MIKAGE_KRKR_STEP_RUNNING;
 
-        // Completion callbacks publish only data. Input and TJS callbacks stay
-        // on this engine thread, while render/timeline progress remains live.
-        const Uint64 pendingInputStarted = SDL_GetTicksNS();
-        TVPProcessPendingLayerPointerEvents();
-        const Uint64 pendingInputDuration = SDL_GetTicksNS() - pendingInputStarted;
-        eventDuration += pendingInputDuration;
-        stepEventTimeNS += pendingInputDuration;
 
         const Uint64 iterateStarted = SDL_GetTicksNS();
         krkrsdl3::TVPBeginRuntimeStep();
@@ -659,6 +621,11 @@ extern "C" MikageKRKRStepResult MikageKRKRStep(void)
                         eventDuration, iterateDuration, eventCount);
         }
         return finishForResult(result);
+    } catch (const eTJSSilent &) {
+        // System.exit already requested termination: a normal end of game.
+        if (TVPTerminated)
+            return finishForResult(SDL_APP_SUCCESS);
+        finish(SDL_APP_FAILURE, "Silent KRKR exception while stepping.");
     } catch (const eTJS &error) {
         std::string message(error.GetMessage().c_str());
         finish(SDL_APP_FAILURE, message.c_str());
@@ -679,6 +646,11 @@ extern "C" bool MikageKRKRRequestExit(void)
         MikageKRKRLogMessage("bridge", 3, "runtime.userClose.requested");
         TVPMainWindow->RequestUserClose();
         return true;
+    } catch (const eTJSSilent &) {
+        // onCloseQuery called System.exit; the next step finishes the session.
+        if (TVPTerminated)
+            return true;
+        lastError = "Silent KRKR exception requesting close-query.";
     } catch (const eTJS &error) {
         lastError = error.GetMessage().c_str();
     } catch (const std::exception &error) {
@@ -751,6 +723,14 @@ extern "C" bool MikageKRKRSetForeground(bool value)
         lastError.clear();
         MikageKRKRLogMessage("audio", 3, "foreground.resumed");
         return true;
+    } catch (const eTJSSilent &) {
+        // An activation handler called System.exit; the next foreground step
+        // finishes the session normally.
+        if (TVPTerminated) {
+            foreground = value;
+            return true;
+        }
+        lastError = "Silent KRKR exception while changing KRKR foreground state.";
     } catch (const eTJS &error) {
         lastError = error.GetMessage().c_str();
     } catch (const std::exception &error) {
@@ -890,34 +870,12 @@ extern "C" bool MikageKRKRGetStats(MikageKRKRStats *stats)
     stats->emoteCaptureRegionPixels = emoteCapture.regionPixels;
     stats->emoteCaptureFullPixels = emoteCapture.fullPixels;
     const auto emotePerf = emoteplayer::performanceStats();
-    stats->emoteNodeCacheHits = emotePerf.nodeCacheHits;
-    stats->emoteNodeCacheMisses = emotePerf.nodeCacheMisses;
-    stats->emoteShapeCacheHits = emotePerf.shapeCacheHits;
-    stats->emoteMeshCacheHits = emotePerf.meshCacheHits;
-    stats->emoteDrawListRebuilds = emotePerf.drawListRebuilds;
-    stats->emoteCaptureKnownBounds = emotePerf.captureKnownBounds;
-    stats->emoteCaptureUnknownBounds = emotePerf.captureUnknownBounds;
-    stats->emoteCaptureCOWFallbacks = emotePerf.captureCOWFallbacks;
-    stats->emoteAlphaRequests = emotePerf.alphaRequests;
-    stats->emoteAlphaCacheHits = emotePerf.alphaCacheHits;
-    stats->emoteAlphaPendingEvents = emotePerf.alphaPendingEvents;
-    stats->emoteAlphaReadBytes = emotePerf.alphaReadBytes;
-    stats->emoteAlphaFailures = emotePerf.alphaFailures;
     stats->emoteUISyncReads = emotePerf.uiSyncReads;
     stats->emoteUISyncWaitNS = emotePerf.uiSyncWaitNS;
-    stats->emoteCaptureExperimentalBoundsKnown = emotePerf.captureExperimentalBoundsKnown;
-    stats->emoteCaptureExperimentalBoundsUnknown = emotePerf.captureExperimentalBoundsUnknown;
-    stats->emoteCaptureExperimentalBoundsPixels = emotePerf.captureExperimentalBoundsPixels;
-    stats->emoteCaptureExperimentalBoundsNS = emotePerf.captureExperimentalBoundsNS;
     stats->emoteCaptureUpdatePixels = emotePerf.captureUpdatePixels;
     stats->emoteCaptureUpdateFullPixels = emotePerf.captureUpdateFullPixels;
-    stats->emoteLocalPoseCacheHits = emotePerf.localPoseCacheHits;
-    stats->emoteLocalPoseCacheMisses = emotePerf.localPoseCacheMisses;
     stats->emoteCaptureRequests = emotePerf.captureRequests;
     stats->emoteCaptureFullCopies = emotePerf.captureFullCopies;
-    stats->emoteCaptureRegionCopies = emotePerf.captureRegionCopies;
-    stats->emoteCaptureRegionFallbacks = emotePerf.captureRegionFallbacks;
-    stats->emoteCaptureBoundsNS = emotePerf.captureBoundsNS;
 
     const auto profile = krkrsdl3::TVPGetRuntimeProfileStats();
     stats->emoteProgressCalls = profile.emoteProgressCalls;
@@ -988,6 +946,7 @@ extern "C" bool MikageKRKRGetStats(MikageKRKRStats *stats)
     stats->emoteLayerCPUReadbacks = profile.emoteLayerCPUReadbacks;
     stats->emoteLayerCPUReadbackBytes = profile.emoteLayerCPUReadbackBytes;
     stats->emoteLayerCPUReadbackTimeNS = profile.emoteLayerCPUReadbackTimeNS;
+    stats->emoteLayerDirectDraws = profile.emoteLayerDirectDraws;
 
     if (SDL_Window *window = MikageKRKRGetSDLWindow()) {
         int width = 0, height = 0;
@@ -1181,6 +1140,10 @@ extern "C" bool MikageKRKRCaptureFrame(MikageKRKRCapturedFrame *frame)
             return true;
         } catch (const std::exception &error) {
             SDL_Log("Native screenshot failed: %s", error.what());
+            return false;
+        } catch (...) {
+            // Never let an engine exception cross the C boundary into Swift.
+            SDL_Log("Native screenshot failed: unknown exception");
             return false;
         }
     }
