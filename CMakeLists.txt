@@ -100,6 +100,12 @@ if(USE_RENDER_METAL AND (NOT (IOS OR MACOS) OR NOT USE_SDL3 OR ONLYCONSOLE))
     message(FATAL_ERROR "USE_RENDER_METAL requires an Apple SDL3 full runtime")
 endif()
 option(KRKR_HOST_LIBRARY "Build KRKR as an embeddable iOS framework" OFF)
+# 宿主共享 SDL3：指向某个 SDL3.framework（单一架构切片）时，KRKRRuntime 动态链接它，
+# 不再静态并入 vcpkg 的 SDL3。宿主 App 负责嵌入同一个 SDL3.framework，供其它引擎复用。
+set(KRKR_SDL3_FRAMEWORK "" CACHE PATH "iOS host: link this shared SDL3.framework instead of vcpkg's static SDL3")
+if(KRKR_SDL3_FRAMEWORK AND NOT (IOS AND KRKR_HOST_LIBRARY AND USE_SDL3))
+    message(FATAL_ERROR "KRKR_SDL3_FRAMEWORK requires an iOS SDL3 build with KRKR_HOST_LIBRARY=ON")
+endif()
 
 # 建立项目
 if(ONLYCONSOLE)
