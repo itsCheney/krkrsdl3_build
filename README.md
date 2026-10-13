@@ -12,10 +12,9 @@
 | --- | --- | --- |
 | `mikage` | Mikage `main` 使用的稳定版运行时 | krkrsdl3 `mikage` |
 | `mikage-beta` | Mikage `beta` 使用的测试版运行时 | krkrsdl3 `mikage-beta` |
-| `metal_dev` | 日常开发 | krkrsdl3 `metal_dev` |
 | `main` | 跟踪上游 krkrsdl3_build | 上游 krkrsdl3 |
 
-合并方向固定为 `metal_dev` → `mikage-beta` → `mikage`，先合并 krkrsdl3，再合并本仓库并更新 `cpp/` 指针，最后在 Mikage Next 对应分支更新子模块。
+合并方向固定为 `mikage-beta` → `mikage`，先合并 krkrsdl3，再合并本仓库并更新 `cpp/` 指针，最后在 Mikage Next 对应分支更新子模块。
 
 ## 宿主接口
 
