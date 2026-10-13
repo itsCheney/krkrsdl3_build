@@ -12,10 +12,9 @@ On top of upstream’s Windows, Linux, Android, WebAssembly, HarmonyOS and macOS
 | --- | --- | --- |
 | `mikage` | Stable runtime, used by Mikage `main` | krkrsdl3 `mikage` |
 | `mikage-beta` | Test runtime, used by Mikage `beta` | krkrsdl3 `mikage-beta` |
-| `metal_dev` | Day-to-day development | krkrsdl3 `metal_dev` |
 | `main` | Tracks upstream krkrsdl3_build | upstream krkrsdl3 |
 
-Merges always go `metal_dev` → `mikage-beta` → `mikage`: krkrsdl3 first, then this repository with the `cpp/` pointer updated, then the submodule on the matching Mikage Next branch.
+Merges always go `mikage-beta` → `mikage`: krkrsdl3 first, then this repository with the `cpp/` pointer updated, then the submodule on the matching Mikage Next branch.
 
 ## Host interface
 
