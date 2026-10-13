@@ -16,7 +16,11 @@ if(IOS AND KRKR_HOST_LIBRARY)
     add_definitions(-DKRKR_HOST_LIBRARY=1)
     list(REMOVE_ITEM KRKRSDL_SRC
         ${KRKRSDL_ENVIRON_PATH}/${KRKRSDL_SDL_NAME}/${KRKRSDL_SDL_NAME}_entry.cpp)
-    list(APPEND KRKRSDL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/host/MikageKRKRRuntime.mm)
+    list(APPEND KRKRSDL_SRC
+        ${CMAKE_CURRENT_SOURCE_DIR}/host/MikageKRKRRuntime.mm
+        ${MIKAGE_SDL_HOST_DIR}/MikageSDLHost.cpp
+        ${MIKAGE_SDL_HOST_DIR}/MikageSDLHostAudioSession.mm)
+    include_directories(${MIKAGE_SDL_HOST_DIR})
 endif()
 
 if(USE_FFMPEG)

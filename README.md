@@ -28,6 +28,8 @@
 
 `KRKR_HOST_LIBRARY=ON` 时构建 `KRKRRuntime.framework`；为 `OFF`（默认）时仍构建原有的独立 iOS 程序。
 
+framework 构建还需要 `MIKAGE_SDL_HOST_DIR` 指向 Mikage Next 的 `Engine/MikageSDLHost`。那是各个 SDL 引擎共用的宿主层：SDL 主回调的逐帧驱动、停止与前后台、音频会话和每局之间的复位都在那里，`MikageKRKRRuntime.mm` 只保留 KRKR 自己的部分。
+
 ## 构建
 
 需要 CMake、vcpkg 和完整的 Xcode（iOS SDK）。iOS 预设使用 Xcode 生成器。依赖（SDL3、FFmpeg 等）通过 vcpkg 安装，首次构建较慢。
@@ -38,7 +40,8 @@ cd krkrsdl3_build
 export VCPKG_ROOT=/path/to/vcpkg
 
 # 嵌入式 framework（Mikage 使用的方式）
-cmake --preset "iOS Device Config" -DKRKR_HOST_LIBRARY=ON -DUSE_RENDER_METAL=ON
+cmake --preset "iOS Device Config" -DKRKR_HOST_LIBRARY=ON -DUSE_RENDER_METAL=ON \
+    -DMIKAGE_SDL_HOST_DIR=/path/to/Mikage-Next/Engine/MikageSDLHost
 cmake --build out/ios-device --config Release --parallel
 
 # 独立的 iOS 程序

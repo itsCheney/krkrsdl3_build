@@ -28,6 +28,8 @@ Merges always go `mikage-beta` → `mikage`: krkrsdl3 first, then this repositor
 
 With `KRKR_HOST_LIBRARY=ON` the build produces `KRKRRuntime.framework`; with `OFF` (the default) it still builds the original standalone iOS app.
 
+The framework build also needs `MIKAGE_SDL_HOST_DIR` pointing at Mikage Next’s `Engine/MikageSDLHost`. That is the host layer every SDL engine shares: it drives the SDL main callbacks frame by frame and owns stopping, foreground changes, the audio session and the reset between games, so `MikageKRKRRuntime.mm` keeps only what is specific to KRKR.
+
 ## Building
 
 You need CMake, vcpkg and a full Xcode with the iOS SDK. The iOS presets use the Xcode generator. Dependencies such as SDL3 and FFmpeg are installed through vcpkg, so the first build takes a while.
@@ -38,7 +40,8 @@ cd krkrsdl3_build
 export VCPKG_ROOT=/path/to/vcpkg
 
 # Embeddable framework (what Mikage uses)
-cmake --preset "iOS Device Config" -DKRKR_HOST_LIBRARY=ON -DUSE_RENDER_METAL=ON
+cmake --preset "iOS Device Config" -DKRKR_HOST_LIBRARY=ON -DUSE_RENDER_METAL=ON \
+    -DMIKAGE_SDL_HOST_DIR=/path/to/Mikage-Next/Engine/MikageSDLHost
 cmake --build out/ios-device --config Release --parallel
 
 # Standalone iOS app

@@ -1,7 +1,7 @@
 #include "MikageKRKRRuntime.h"
+#include "MikageSDLHost.h"
 
 #import <Foundation/Foundation.h>
-#import <AVFAudio/AVFAudio.h>
 #include <TargetConditionals.h>
 
 #include <SDL3/SDL.h>
@@ -250,17 +250,9 @@ extern "C" SDL_Window *MikageKRKRGetSDLWindow(void);
 extern "C" const char *MikageKRKRGetActiveRendererName(void);
 
 namespace {
-bool running = false;
-bool foreground = true;
-bool stopRequested = false;
 // Nonzero while MikageKRKRStep is on the stack. A modal SDL dialog pumps the
 // run loop mid-script, so host callbacks can arrive inside a step.
 int stepDepth = 0;
-void *appState = nullptr;
-std::string lastError;
-MikageKRKRMenuCallback menuCallback = nullptr;
-MikageKRKRCompletionCallback completionCallback = nullptr;
-void *callbackContext = nullptr;
 std::string activeRenderer;
 Uint64 statsWindowStarted = 0;
 Uint64 previousFrameAt = 0;
@@ -270,7 +262,6 @@ double currentFPS = 0;
 double currentFrameTimeMS = 0;
 Uint64 frameWorkTotal = 0, frameWorkMax = 0;
 double currentCpuFrameTimeMS = 0, currentMaxCpuFrameTimeMS = 0;
-Uint64 stepEventTimeNS = 0, stepIterateTimeNS = 0;
 constexpr Uint64 nanosecondsPerSecond = 1000000000ULL;
 constexpr Uint64 slowFrameThresholdNS = 50000000ULL;
 Uint64 slowFrameCount = 0;
@@ -288,7 +279,6 @@ void resetStats()
     currentFrameTimeMS = 0;
     frameWorkTotal = frameWorkMax = 0;
     currentCpuFrameTimeMS = currentMaxCpuFrameTimeMS = 0;
-    stepEventTimeNS = stepIterateTimeNS = 0;
     slowFrameCount = 0;
     peakFrameEventTimeNS = peakFrameIterateTimeNS = peakFrameEventCount = 0;
 }
@@ -344,91 +334,86 @@ void recordFrame(Uint64 presentedAt, Uint64 workDuration,
     }
 }
 
-void resetAfterStartFailure(const std::string &message)
+// KRKR's side of the shared SDL host session (MikageSDLHost.h).
+SDL_AppResult hostInit(void **appstate, int argc, char *argv[])
 {
-    MikageKRKRLogMessage("bridge", 5, message.c_str());
-    TVPSetAudioSuspended(true);
-    if (appState) {
-        try {
-            SDL_AppQuit(appState, SDL_APP_FAILURE);
-        } catch (...) {
-            // A partially initialized runtime must not throw across the C boundary.
-        }
-    }
-    endDiagnosticScriptTraceSession();
-    TVPSetGameRunningOrientation(false);
-    MikageKRKRSetWindowScene(nullptr);
-    running = false;
-    foreground = true;
-    stopRequested = false;
-    appState = nullptr;
-    menuCallback = nullptr;
-    completionCallback = nullptr;
-    callbackContext = nullptr;
-    activeRenderer.clear();
-    resetStats();
-    lastError = message.empty() ? "KRKR initialization failed." : message;
+    SDL_AppResult result = SDL_AppInit(appstate, argc, argv);
+    const char *actualRenderer = MikageKRKRGetActiveRendererName();
+    if (actualRenderer && *actualRenderer)
+        activeRenderer = actualRenderer;
+    MikageKRKRLogMessage("bridge", 3, activeRenderer.c_str());
+    return result;
 }
 
-void finish(SDL_AppResult result, const char *message)
+SDL_AppResult hostEvent(void *appstate, SDL_Event *event)
 {
-    MikageKRKRLogMessage("bridge", 3, "runtime.finish.begin");
-    if (message && *message)
-        MikageKRKRLogMessage("bridge", 5, message);
-    if (!running && !appState)
-        return;
+    switch (event->type) {
+        case SDL_EVENT_WINDOW_EXPOSED:
+        case SDL_EVENT_WINDOW_RESIZED:
+        case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+        case SDL_EVENT_WINDOW_SHOWN:
+        case SDL_EVENT_WINDOW_HIDDEN:
+        case SDL_EVENT_WINDOW_RESTORED:
+        case SDL_EVENT_DID_ENTER_FOREGROUND:
+        case SDL_EVENT_DID_ENTER_BACKGROUND:
+            krkrsdl3::TVPInvalidatePresentation("host.lifecycle");break;
+        default:break;
+    }
+    return SDL_AppEvent(appstate, event);
+}
 
+SDL_AppResult hostIterate(void *appstate)
+{
+    krkrsdl3::TVPBeginRuntimeStep();
+    SDL_AppResult result = SDL_AppIterate(appstate);
+    krkrsdl3::TVPEndRuntimeStep();
+    return result;
+}
+
+SDL_AppResult hostQuit(void *appstate, SDL_AppResult result)
+{
     try {
-        TVPSetAudioSuspended(true);
-        SDL_AppQuit(appState, result);
+        SDL_AppQuit(appstate, result);
     } catch (const eTJS &error) {
-        result = SDL_APP_FAILURE;
-        lastError = error.GetMessage().c_str();
-    } catch (const std::exception &error) {
-        result = SDL_APP_FAILURE;
-        lastError = error.what() ? error.what() : "C++ exception during KRKR shutdown.";
-    } catch (...) {
-        result = SDL_APP_FAILURE;
-        lastError = "Unknown C++ exception during KRKR shutdown.";
+        MikageSDLHostSetLastError(error.GetMessage().c_str());
+        return SDL_APP_FAILURE;
     }
+    return result;
+}
+
+void hostSessionEnded()
+{
     endDiagnosticScriptTraceSession();
     TVPSetGameRunningOrientation(false);
     MikageKRKRSetWindowScene(nullptr);
-    [[AVAudioSession sharedInstance]
-        setActive:NO
-        withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation
-        error:nil];
-
-    const bool success = result == SDL_APP_SUCCESS;
-    if (!success && lastError.empty())
-        lastError = message && *message ? message : SDL_GetError();
-
-    running = false;
-    foreground = true;
-    stopRequested = false;
-    appState = nullptr;
-
-    auto callback = completionCallback;
-    auto context = callbackContext;
-    menuCallback = nullptr;
-    completionCallback = nullptr;
-    callbackContext = nullptr;
     activeRenderer.clear();
-    resetStats();
-    MikageKRKRLogMessage("bridge", success ? 3 : 5,
-                         success ? "runtime.finish.success" : lastError.c_str());
-    if (callback)
-        callback(success, success ? nullptr : lastError.c_str(), context);
 }
 
-MikageKRKRStepResult finishForResult(SDL_AppResult result)
+void hostSetActive(bool active)
 {
-    if (result == SDL_APP_CONTINUE)
-        return MIKAGE_KRKR_STEP_RUNNING;
-    const char *message = result == SDL_APP_FAILURE ? SDL_GetError() : nullptr;
-    finish(result, message);
-    return result == SDL_APP_SUCCESS ? MIKAGE_KRKR_STEP_FINISHED : MIKAGE_KRKR_STEP_FAILED;
+    if (Application)
+        Application->NotifyActiveEvent(active ? eTVPActiveEvent::onActive : eTVPActiveEvent::onDeactive);
 }
+
+void hostFrameCompleted(const MikageSDLHostFrame *frame)
+{
+    recordFrame(frame->finishedNS, frame->workNS,
+                frame->eventNS, frame->iterateNS, frame->eventCount);
+}
+
+const MikageSDLHostEngine krkrEngine = {
+    "KRKR",
+    hostInit,
+    hostEvent,
+    hostIterate,
+    hostQuit,
+    hostSessionEnded,
+    TVPSetAudioSuspended,
+    hostSetActive,
+    hostFrameCompleted,
+    resetStats,
+    MikageKRKRLogMessage,
+};
 }
 
 extern "C" bool MikageKRKRStart(const char *gamePath,
@@ -441,12 +426,12 @@ extern "C" bool MikageKRKRStart(const char *gamePath,
                                   void *context)
 {
     DiagnosticScriptTraceScope traceScope;
-    if (running) {
-        lastError = "A KRKR session is already running.";
+    if (MikageSDLHostIsRunning()) {
+        MikageSDLHostSetLastError("A KRKR session is already running.");
         return false;
     }
     if (!gamePath || !*gamePath) {
-        lastError = "The KRKR game path is empty.";
+        MikageSDLHostSetLastError("The KRKR game path is empty.");
         return false;
     }
 
@@ -454,7 +439,7 @@ extern "C" bool MikageKRKRStart(const char *gamePath,
         NSString *path = [NSString stringWithUTF8String:gamePath];
         BOOL isDirectory = NO;
         if (!path || ![[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&isDirectory]) {
-            lastError = "The KRKR game path does not exist.";
+            MikageSDLHostSetLastError("The KRKR game path does not exist.");
             return false;
         }
 
@@ -466,20 +451,6 @@ extern "C" bool MikageKRKRStart(const char *gamePath,
             MikageKRKRSetLogCallback(diagnosticCallback.load(std::memory_order_acquire));
             if (!applyEmoteAnimationModeForStart())
                 throw std::runtime_error("Failed to select Emote animation mode.");
-            // SDL defaults to playback on iOS, which ignores the Ring/Silent
-            // switch. The host preference chooses normal game-style ambient
-            // behavior or SDL's playback behavior before any audio device opens.
-            SDL_SetHintWithPriority(
-                SDL_HINT_AUDIO_CATEGORY,
-                respectSilentMode ? "ambient" : "playback",
-                SDL_HINT_OVERRIDE
-            );
-            MikageKRKRLogMessage(
-                "audio",
-                3,
-                respectSilentMode ? "category.ambient" : "category.playback"
-            );
-            SDL_SetMainReady();
             MikageKRKRSetWindowScene(uiWindowScene);
             MikageKRKRSetMenuGestureEnabled(menuGestureEnabled);
             TVPSetGameRunningOrientation(true);
@@ -502,69 +473,48 @@ extern "C" bool MikageKRKRStart(const char *gamePath,
             for (auto &argument : arguments)
                 argv.push_back(argument.data());
 
-            menuCallback = menu;
-            completionCallback = completion;
-            callbackContext = context;
-            lastError.clear();
             activeRenderer = renderer && *renderer ? renderer : "metal";
-            stopRequested = false;
-            resetStats();
             // Capture diagnostics are session-scoped, just like Layer stats.
             // Do not let a previous game make GPU-copy/fallback counts ambiguous.
             krkrsdl3::TVPResetEmoteCaptureStats();
             krkrsdl3::TVPResetRuntimeProfileStats();
-            appState = nullptr;
 
             traceScope.BeginSession();
             TVPHostOwnsProcess = true;
-            SDL_AppResult result = SDL_AppInit(
-                &appState,
+            const MikageSDLHostConfiguration configuration = {
                 static_cast<int>(argv.size()),
-                argv.data()
-            );
-            const char *actualRenderer = MikageKRKRGetActiveRendererName();
-            if (actualRenderer && *actualRenderer)
-                activeRenderer = actualRenderer;
-            MikageKRKRLogMessage("bridge", 3, activeRenderer.c_str());
-            if (result != SDL_APP_CONTINUE) {
-                running = true;
-                finish(result, SDL_GetError());
+                argv.data(),
+                uiWindowScene,
+                respectSilentMode,
+                menu,
+                completion,
+                context,
+            };
+            // The host finishes the session itself when SDL_AppInit fails.
+            if (!MikageSDLHostStart(&krkrEngine, &configuration))
                 return false;
-            }
-            NSError *audioError = nil;
-            [[AVAudioSession sharedInstance] setActive:YES error:&audioError];
-            if (audioError) {
-                lastError = audioError.localizedDescription.UTF8String;
-                TVPSetAudioSuspended(true);
-            } else {
-                TVPSetAudioSuspended(false);
-            }
         } catch (const eTJSSilent &) {
-            resetAfterStartFailure(TVPTerminated ? "The game exited during startup."
-                                                 : "Silent KRKR exception during startup.");
+            MikageSDLHostAbortStart(TVPTerminated ? "The game exited during startup."
+                                                  : "Silent KRKR exception during startup.");
             return false;
         } catch (const eTJS &error) {
-            resetAfterStartFailure(std::string(error.GetMessage().c_str()));
+            MikageSDLHostAbortStart(std::string(error.GetMessage().c_str()).c_str());
             return false;
         } catch (const std::exception &error) {
-            resetAfterStartFailure(error.what() ? error.what() : "C++ exception during KRKR startup.");
+            MikageSDLHostAbortStart(error.what() ? error.what() : "C++ exception during KRKR startup.");
             return false;
         } catch (...) {
-            resetAfterStartFailure("Unknown C++ exception during KRKR startup.");
+            MikageSDLHostAbortStart("Unknown C++ exception during KRKR startup.");
             return false;
         }
     }
-
-    running = true;
-    foreground = true;
-    resetStats(); // Exclude startup/shader compilation from the first gameplay window.
     return true;
 }
 
 extern "C" MikageKRKRStepResult MikageKRKRStep(void)
 {
     DiagnosticScriptTraceScope traceScope;
-    if (!running)
+    if (!MikageSDLHostIsRunning())
         return MIKAGE_KRKR_STEP_IDLE;
     krkrsdl3::cpu_frame::rawLine = [](const char* line) {MikageKRKRLogMessage("KRKR", 3, line);};
     krkrsdl3::cpu_frame::captureStack = [](char* out, size_t bytes, unsigned frames) {
@@ -577,62 +527,19 @@ extern "C" MikageKRKRStepResult MikageKRKRStep(void)
     } depth;
 
     try {
-        const Uint64 frameStarted = SDL_GetTicksNS();
-        const Uint64 eventsStarted = frameStarted;
-        Uint64 eventCount = 0;
-        SDL_Event event;
-        while (SDL_PollEvent(&event)) {
-            ++eventCount;
-            switch (event.type) {
-                case SDL_EVENT_WINDOW_EXPOSED:
-                case SDL_EVENT_WINDOW_RESIZED:
-                case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
-                case SDL_EVENT_WINDOW_SHOWN:
-                case SDL_EVENT_WINDOW_HIDDEN:
-                case SDL_EVENT_WINDOW_RESTORED:
-                case SDL_EVENT_DID_ENTER_FOREGROUND:
-                case SDL_EVENT_DID_ENTER_BACKGROUND:
-                    krkrsdl3::TVPInvalidatePresentation("host.lifecycle");break;
-                default:break;
-            }
-            SDL_AppResult result = SDL_AppEvent(appState, &event);
-            if (result != SDL_APP_CONTINUE)
-                return finishForResult(result);
-        }
-        Uint64 eventDuration = SDL_GetTicksNS() - eventsStarted;
-        stepEventTimeNS += eventDuration;
-
-        if (stopRequested)
-            return finishForResult(SDL_APP_SUCCESS);
-
-        if (!foreground)
-            return MIKAGE_KRKR_STEP_RUNNING;
-
-
-        const Uint64 iterateStarted = SDL_GetTicksNS();
-        krkrsdl3::TVPBeginRuntimeStep();
-        SDL_AppResult result = SDL_AppIterate(appState);
-        krkrsdl3::TVPEndRuntimeStep();
-        const Uint64 frameFinished = SDL_GetTicksNS();
-        const Uint64 iterateDuration = frameFinished - iterateStarted;
-        stepIterateTimeNS += iterateDuration;
-        if (result == SDL_APP_CONTINUE) {
-            recordFrame(frameFinished, frameFinished - frameStarted,
-                        eventDuration, iterateDuration, eventCount);
-        }
-        return finishForResult(result);
+        return static_cast<MikageKRKRStepResult>(MikageSDLHostStep());
     } catch (const eTJSSilent &) {
         // System.exit already requested termination: a normal end of game.
         if (TVPTerminated)
-            return finishForResult(SDL_APP_SUCCESS);
-        finish(SDL_APP_FAILURE, "Silent KRKR exception while stepping.");
+            return static_cast<MikageKRKRStepResult>(MikageSDLHostFinish(SDL_APP_SUCCESS, nullptr));
+        MikageSDLHostFinish(SDL_APP_FAILURE, "Silent KRKR exception while stepping.");
     } catch (const eTJS &error) {
         std::string message(error.GetMessage().c_str());
-        finish(SDL_APP_FAILURE, message.c_str());
+        MikageSDLHostFinish(SDL_APP_FAILURE, message.c_str());
     } catch (const std::exception &error) {
-        finish(SDL_APP_FAILURE, error.what());
+        MikageSDLHostFinish(SDL_APP_FAILURE, error.what());
     } catch (...) {
-        finish(SDL_APP_FAILURE, "Unknown C++ exception while stepping KRKR.");
+        MikageSDLHostFinish(SDL_APP_FAILURE, "Unknown C++ exception while stepping KRKR.");
     }
     return MIKAGE_KRKR_STEP_FAILED;
 }
@@ -640,7 +547,7 @@ extern "C" MikageKRKRStepResult MikageKRKRStep(void)
 extern "C" bool MikageKRKRRequestExit(void)
 {
     DiagnosticScriptTraceScope traceScope;
-    if (!running || !foreground || !TVPMainWindow)
+    if (!MikageSDLHostIsRunning() || !MikageSDLHostIsForeground() || !TVPMainWindow)
         return false;
     try {
         MikageKRKRLogMessage("bridge", 3, "runtime.userClose.requested");
@@ -650,15 +557,15 @@ extern "C" bool MikageKRKRRequestExit(void)
         // onCloseQuery called System.exit; the next step finishes the session.
         if (TVPTerminated)
             return true;
-        lastError = "Silent KRKR exception requesting close-query.";
+        MikageSDLHostSetLastError("Silent KRKR exception requesting close-query.");
     } catch (const eTJS &error) {
-        lastError = error.GetMessage().c_str();
+        MikageSDLHostSetLastError(error.GetMessage().c_str());
     } catch (const std::exception &error) {
-        lastError = error.what() ? error.what() : "KRKR close-query failed.";
+        MikageSDLHostSetLastError(error.what() ? error.what() : "KRKR close-query failed.");
     } catch (...) {
-        lastError = "Unknown exception requesting KRKR close-query.";
+        MikageSDLHostSetLastError("Unknown exception requesting KRKR close-query.");
     }
-    MikageKRKRLogMessage("bridge", 5, lastError.c_str());
+    MikageKRKRLogMessage("bridge", 5, MikageSDLHostLastError());
     return false;
 }
 
@@ -666,13 +573,13 @@ extern "C" void MikageKRKRRequestStop(void)
 {
     DiagnosticScriptTraceScope traceScope;
     try {
-        if (running) {
-            stopRequested = true;
+        if (MikageSDLHostIsRunning()) {
+            MikageSDLHostRequestStop();
             if (Application)
                 Application->Terminate();
         }
     } catch (...) {
-        finish(SDL_APP_FAILURE, "C++ exception while stopping KRKR.");
+        MikageSDLHostFinish(SDL_APP_FAILURE, "C++ exception while stopping KRKR.");
     }
 }
 
@@ -681,72 +588,41 @@ extern "C" bool MikageKRKRSetForeground(bool value)
     DiagnosticScriptTraceScope traceScope;
     MikageKRKRLogMessage("audio", 3, value ? "foreground.resume.requested" : "foreground.suspend.requested");
     try {
-        if (foreground == value)
+        if (MikageSDLHostIsForeground() == value)
             return true;
         krkrsdl3::TVPInvalidatePresentation(value ? "host.foreground" : "host.background");
-        if (!value) {
-            // The engine's idle compact now saves system variables at most
-            // once a minute. iOS may terminate a backgrounded app without
-            // onClose, so persist them here unless script is mid-execution.
-            if (running && !stepDepth)
-                TVPDoSaveSystemVariables();
-            foreground = false;
-            if (Application)
-                Application->NotifyActiveEvent(eTVPActiveEvent::onDeactive);
-            TVPSetAudioSuspended(true);
-            NSError *error = nil;
-            [[AVAudioSession sharedInstance]
-                setActive:NO
-                withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation
-                error:&error];
-            if (error)
-                lastError = error.localizedDescription.UTF8String;
-            else
-                lastError.clear();
-            MikageKRKRLogMessage("audio", error ? 5 : 3,
-                                 error ? lastError.c_str() : "foreground.suspended");
-            return error == nil;
-        }
-
-        NSError *error = nil;
-        [[AVAudioSession sharedInstance] setActive:YES error:&error];
-        if (error) {
-            lastError = error.localizedDescription.UTF8String;
-            MikageKRKRLogMessage("audio", 5, lastError.c_str());
-            return false;
-        }
-        TVPSetAudioSuspended(false);
-        if (Application)
-            Application->NotifyActiveEvent(eTVPActiveEvent::onActive);
-        foreground = value;
-        resetStats(); // Background time is not a gameplay frame interval.
-        lastError.clear();
-        MikageKRKRLogMessage("audio", 3, "foreground.resumed");
-        return true;
+        // The engine's idle compact now saves system variables at most once a
+        // minute. iOS may terminate a backgrounded app without onClose, so
+        // persist them here unless script is mid-execution.
+        if (!value && MikageSDLHostIsRunning() && !stepDepth)
+            TVPDoSaveSystemVariables();
+        // The host deactivates the game (onDeactive) and its audio, or
+        // reactivates them, through krkrEngine.
+        return MikageSDLHostSetForeground(value);
     } catch (const eTJSSilent &) {
         // An activation handler called System.exit; the next foreground step
         // finishes the session normally.
         if (TVPTerminated) {
-            foreground = value;
+            MikageSDLHostSetForegroundState(value);
             return true;
         }
-        lastError = "Silent KRKR exception while changing KRKR foreground state.";
+        MikageSDLHostSetLastError("Silent KRKR exception while changing KRKR foreground state.");
     } catch (const eTJS &error) {
-        lastError = error.GetMessage().c_str();
+        MikageSDLHostSetLastError(error.GetMessage().c_str());
     } catch (const std::exception &error) {
-        lastError = error.what() ? error.what() : "C++ exception while changing KRKR foreground state.";
+        MikageSDLHostSetLastError(error.what() ? error.what() : "C++ exception while changing KRKR foreground state.");
     } catch (...) {
-        lastError = "Unknown C++ exception while changing KRKR foreground state.";
+        MikageSDLHostSetLastError("Unknown C++ exception while changing KRKR foreground state.");
     }
     TVPSetAudioSuspended(true);
-    foreground = false;
-    MikageKRKRLogMessage("audio", 5, lastError.c_str());
+    MikageSDLHostSetForegroundState(false);
+    MikageKRKRLogMessage("audio", 5, MikageSDLHostLastError());
     return false;
 }
 
 extern "C" bool MikageKRKRGetStats(MikageKRKRStats *stats)
 {
-    if (!running || !stats)
+    if (!MikageSDLHostIsRunning() || !stats)
         return false;
     std::memset(stats, 0, sizeof(*stats));
     stats->framesPerSecond = currentFPS;
@@ -930,8 +806,8 @@ extern "C" bool MikageKRKRGetStats(MikageKRKRStats *stats)
     stats->metalRingHighWaterBytes = profile.metalRingHighWaterBytes;
     stats->metalRingFallbackAllocations = profile.metalRingFallbackAllocations;
     stats->metalRingFallbackBytes = profile.metalRingFallbackBytes;
-    stats->stepEventTimeNS = stepEventTimeNS;
-    stats->stepIterateTimeNS = stepIterateTimeNS;
+    stats->stepEventTimeNS = MikageSDLHostEventTimeNS();
+    stats->stepIterateTimeNS = MikageSDLHostIterateTimeNS();
     stats->metalRenderEncoders = profile.metalRenderEncoders;
     stats->metalComputeEncoders = profile.metalComputeEncoders;
     stats->metalBlitEncoders = profile.metalBlitEncoders;
@@ -962,7 +838,7 @@ extern "C" bool MikageKRKRTakeLayerWorkProfile(MikageKRKRLayerWorkProfile *profi
 {
     krkrsdl3::layer_work::lastSuccessfulProfileWindowID=0;
     krkrsdl3::layer_work::lastSuccessfulProfileGeneration=0;
-    if(!running || !profile || !diagnosticCallback.load(std::memory_order_acquire)) return false;
+    if(!MikageSDLHostIsRunning() || !profile || !diagnosticCallback.load(std::memory_order_acquire)) return false;
     std::memset(profile,0,sizeof(*profile));
     try {
         const auto sample=krkrsdl3::layer_work::Take();
@@ -1055,7 +931,7 @@ extern "C" const uint64_t *MikageKRKRLayerWorkProfileShrinkReadWait(const Mikage
 
 extern "C" bool MikageKRKRTakeLayerTriangleProfile(MikageKRKRLayerTriangleProfile *profile)
 {
-    if (!running || !profile || !diagnosticCallback.load(std::memory_order_acquire))
+    if (!MikageSDLHostIsRunning() || !profile || !diagnosticCallback.load(std::memory_order_acquire))
         return false;
     std::memset(profile, 0, sizeof(*profile));
     try {
@@ -1094,12 +970,12 @@ extern "C" bool MikageKRKRTakeLayerTriangleProfile(MikageKRKRLayerTriangleProfil
 
 extern "C" bool MikageKRKRIsRunning(void)
 {
-    return running;
+    return MikageSDLHostIsRunning();
 }
 
 extern "C" const char *MikageKRKRLastError(void)
 {
-    return lastError.c_str();
+    return MikageSDLHostLastError();
 }
 
 extern "C" void *MikageKRKRNativeWindow(void)
@@ -1107,20 +983,18 @@ extern "C" void *MikageKRKRNativeWindow(void)
     SDL_Window *window = MikageKRKRGetSDLWindow();
     if (!window)
         return nullptr;
-    return SDL_GetPointerProperty(SDL_GetWindowProperties(window),
-                                  SDL_PROP_WINDOW_UIKIT_WINDOW_POINTER,
-                                  nullptr);
+    return MikageSDLHostUIKitWindow(window);
 }
 
 extern "C" void MikageKRKRNotifyMenu(void)
 {
-    if (menuCallback)
-        menuCallback(callbackContext);
+    MikageSDLHostNotifyMenu();
 }
 
 extern "C" bool MikageKRKRCaptureFrame(MikageKRKRCapturedFrame *frame)
 {
-    if (!frame || frame->pixels || !running || !foreground || ![NSThread isMainThread])
+    if (!frame || frame->pixels || !MikageSDLHostIsRunning() || !MikageSDLHostIsForeground() ||
+        ![NSThread isMainThread])
         return false;
     *frame = {};
     @autoreleasepool {
