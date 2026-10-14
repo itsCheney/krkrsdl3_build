@@ -219,6 +219,9 @@ MikageKRKRStepResult MikageKRKRStep(void);
 // Request KRKR's normal main-window close query; game may confirm or cancel.
 // No forced termination and no foreground suspension while it is pending.
 bool MikageKRKRRequestExit(void);
+// Sends the game an Escape key press, for games whose only way back is the
+// keyboard. Delivered on the next step.
+bool MikageKRKRSendBack(void);
 // Forced host stop for interrupted startup/host lifecycle cleanup.
 void MikageKRKRRequestStop(void);
 bool MikageKRKRSetForeground(bool foreground);

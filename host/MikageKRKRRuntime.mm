@@ -569,6 +569,15 @@ extern "C" bool MikageKRKRRequestExit(void)
     return false;
 }
 
+extern "C" bool MikageKRKRSendBack(void)
+{
+    if (!MikageSDLHostIsForeground())
+        return false;
+    const bool sent = MikageSDLHostSendBackKey();
+    MikageKRKRLogMessage("bridge", sent ? 3 : 4, sent ? "runtime.back.sent" : "runtime.back.unavailable");
+    return sent;
+}
+
 extern "C" void MikageKRKRRequestStop(void)
 {
     DiagnosticScriptTraceScope traceScope;
