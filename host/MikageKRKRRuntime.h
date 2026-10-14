@@ -210,6 +210,9 @@ typedef struct MikageKRKRStats {
     uint64_t layerGPURejectPsTables;
     uint64_t layerGPURejectAffineAlias;
     uint64_t layerGPURejectPerspectiveAlias;
+    // GPU draw calls per presented frame over the last stats window; 0 on
+    // the software renderer.
+    double drawCallsPerFrame;
 } MikageKRKRStats;
 
 bool MikageKRKRStart(const char *gamePath,

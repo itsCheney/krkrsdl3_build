@@ -268,6 +268,8 @@ double currentFPS = 0;
 double currentFrameTimeMS = 0;
 Uint64 frameWorkTotal = 0, frameWorkMax = 0;
 double currentCpuFrameTimeMS = 0, currentMaxCpuFrameTimeMS = 0;
+uint64_t drawCallsAtWindowStart = 0;
+double currentDrawCallsPerFrame = 0;
 constexpr Uint64 nanosecondsPerSecond = 1000000000ULL;
 constexpr Uint64 slowFrameThresholdNS = 50000000ULL;
 Uint64 slowFrameCount = 0;
@@ -285,6 +287,8 @@ void resetStats()
     currentFrameTimeMS = 0;
     frameWorkTotal = frameWorkMax = 0;
     currentCpuFrameTimeMS = currentMaxCpuFrameTimeMS = 0;
+    drawCallsAtWindowStart = krkrsdl3::TVPGetDrawCallCount();
+    currentDrawCallsPerFrame = 0;
     slowFrameCount = 0;
     peakFrameEventTimeNS = peakFrameIterateTimeNS = peakFrameEventCount = 0;
 }
@@ -317,6 +321,10 @@ void recordFrame(Uint64 presentedAt, Uint64 workDuration,
                 static_cast<double>(frameIntervalTotal) / (frameCount - 1) / 1000000.0;
         currentCpuFrameTimeMS = static_cast<double>(frameWorkTotal) / frameCount / 1000000.0;
         currentMaxCpuFrameTimeMS = static_cast<double>(frameWorkMax) / 1000000.0;
+        const uint64_t drawCalls = krkrsdl3::TVPGetDrawCallCount();
+        currentDrawCallsPerFrame =
+            static_cast<double>(drawCalls - drawCallsAtWindowStart) / frameCount;
+        drawCallsAtWindowStart = drawCalls;
         if (slowFrameCount) {
             // At most one summary per stats window. These are wall durations,
             // including GPU waits, and all peak fields describe the same step.
@@ -646,6 +654,7 @@ extern "C" bool MikageKRKRGetStats(MikageKRKRStats *stats)
     stats->frameTimeMilliseconds = currentFrameTimeMS;
     stats->cpuFrameTimeMilliseconds = currentCpuFrameTimeMS;
     stats->maxCpuFrameTimeMilliseconds = currentMaxCpuFrameTimeMS;
+    stats->drawCallsPerFrame = currentDrawCallsPerFrame;
     auto* backend = krkrsdl3::TVPGetRenderBackend();
     stats->gpuSubmissionTimeMilliseconds = backend ? backend->GetGpuSubmissionTimeMilliseconds() : -1.0;
     stats->presentationWaitTimeMilliseconds = backend ? backend->GetPresentationWaitTimeMilliseconds() : -1.0;
