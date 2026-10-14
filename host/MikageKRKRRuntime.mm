@@ -33,6 +33,7 @@ std::mutex logOutputMutex;
 std::mutex skippedMoviesMutex;
 std::string skippedMovies;
 std::atomic<bool> experimentalEmote{false};
+std::atomic<bool> stretchToScreen{false};
 thread_local bool mirroringKRKRLog = false;
 SDL_LogOutputFunction previousLogOutput = nullptr;
 void *previousLogContext = nullptr;
@@ -116,6 +117,11 @@ extern "C" void MikageKRKRSetLogCallback(MikageKRKRLogCallback callback)
 extern "C" void MikageKRKRSetExperimentalEmote(bool enabled)
 {
     experimentalEmote.store(enabled, std::memory_order_relaxed);
+}
+
+extern "C" void MikageKRKRSetStretchToScreen(bool enabled)
+{
+    stretchToScreen.store(enabled, std::memory_order_relaxed);
 }
 
 static bool applyEmoteAnimationModeForStart()
@@ -467,6 +473,8 @@ extern "C" bool MikageKRKRStart(const char *gamePath,
                 arguments.emplace_back("-forcelog=yes");
             if (renderer && *renderer)
                 arguments.emplace_back(std::string("-render=") + renderer);
+            if (stretchToScreen.load(std::memory_order_relaxed))
+                arguments.emplace_back("-stretch=1");
 
             std::vector<char *> argv;
             argv.reserve(arguments.size());
