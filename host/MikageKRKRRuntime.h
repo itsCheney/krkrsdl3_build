@@ -35,8 +35,9 @@ void MikageKRKRSetSkippedMovies(const char *newlineSeparatedNames);
 // The host's explicit choice overrides an environment or prior SDL hint.
 void MikageKRKRSetExperimentalEmote(bool enabled);
 
-// Whether the next Start stretches the game to the whole display instead of
-// keeping its aspect ratio with black bars (the default).
+// Whether the next Start stretches a game narrower than 16:9 (such as 4:3)
+// to 16:9. Games keep their own aspect ratio by default; either way the
+// picture is centered with black bars.
 void MikageKRKRSetStretchToScreen(bool enabled);
 
 typedef struct MikageKRKRStats {
