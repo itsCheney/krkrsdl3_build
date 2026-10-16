@@ -32,7 +32,6 @@ std::atomic<MikageKRKRLogCallback> diagnosticCallback{nullptr};
 std::mutex logOutputMutex;
 std::mutex skippedMoviesMutex;
 std::string skippedMovies;
-std::atomic<bool> experimentalEmote{false};
 std::atomic<bool> stretchToScreen{false};
 thread_local bool mirroringKRKRLog = false;
 SDL_LogOutputFunction previousLogOutput = nullptr;
@@ -114,25 +113,9 @@ extern "C" void MikageKRKRSetLogCallback(MikageKRKRLogCallback callback)
     }
 }
 
-extern "C" void MikageKRKRSetExperimentalEmote(bool enabled)
-{
-    experimentalEmote.store(enabled, std::memory_order_relaxed);
-}
-
 extern "C" void MikageKRKRSetStretchToScreen(bool enabled)
 {
     stretchToScreen.store(enabled, std::memory_order_relaxed);
-}
-
-static bool applyEmoteAnimationModeForStart()
-{
-    const bool enabled = experimentalEmote.load(std::memory_order_relaxed);
-    if (!SDL_SetHintWithPriority("MIKAGE_EMOTE_ANIMATION_MODE",
-        enabled ? "integrated" : "legacy", SDL_HINT_OVERRIDE)) return false;
-    MikageKRKRLogMessage("emote", 3, enabled ? "animation.integrated" : "animation.legacy");
-    // Per-session Emote counters start from zero for each game.
-    emoteplayer::resetPerformanceStats();
-    return true;
 }
 
 #include "TVPApplication.h"
@@ -463,8 +446,8 @@ extern "C" bool MikageKRKRStart(const char *gamePath,
 
         try {
             MikageKRKRSetLogCallback(diagnosticCallback.load(std::memory_order_acquire));
-            if (!applyEmoteAnimationModeForStart())
-                throw std::runtime_error("Failed to select Emote animation mode.");
+            // Per-session Emote counters start from zero for each game.
+            emoteplayer::resetPerformanceStats();
             MikageKRKRSetWindowScene(uiWindowScene);
             MikageKRKRSetMenuGestureEnabled(menuGestureEnabled);
             TVPSetGameRunningOrientation(true);

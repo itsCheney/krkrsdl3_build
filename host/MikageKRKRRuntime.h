@@ -30,11 +30,6 @@ void MikageKRKRSetLogCallback(MikageKRKRLogCallback callback);
 // movie that is already playing.
 void MikageKRKRSetSkippedMovies(const char *newlineSeparatedNames);
 
-// Select the animation implementation for the next Start. Does not change the
-// current session or its existing/new Emote players. Default is legacy (false).
-// The host's explicit choice overrides an environment or prior SDL hint.
-void MikageKRKRSetExperimentalEmote(bool enabled);
-
 // Whether the next Start stretches a game narrower than 16:9 (such as 4:3)
 // to 16:9. Games keep their own aspect ratio by default; either way the
 // picture is centered with black bars.

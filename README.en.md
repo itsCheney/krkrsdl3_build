@@ -24,7 +24,7 @@ Merges always go `mikage-beta` → `mikage`: krkrsdl3 first, then this repositor
 - `MikageKRKRSetForeground`: move between foreground and background; system variables are saved on the way to the background.
 - `MikageKRKRGetStats` and the profile functions: frame rate, CPU and GPU time, layer workload and other performance data.
 - `MikageKRKRCaptureFrame`: capture the current frame.
-- `MikageKRKRSetSkippedMovies`, `MikageKRKRSetExperimentalEmote`, `MikageKRKRSetLogCallback`: skip named movies, choose the Emote implementation, receive engine logs.
+- `MikageKRKRSetSkippedMovies`, `MikageKRKRSetLogCallback`: skip named movies, receive engine logs.
 
 With `KRKR_HOST_LIBRARY=ON` the build produces `KRKRRuntime.framework`; with `OFF` (the default) it still builds the original standalone iOS app.
 

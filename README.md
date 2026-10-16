@@ -24,7 +24,7 @@
 - `MikageKRKRSetForeground`：切换前后台；进入后台时保存系统变量。
 - `MikageKRKRGetStats` 及各类 profile 函数：帧率、CPU/GPU 时间、图层工作量等性能数据。
 - `MikageKRKRCaptureFrame`：截取当前画面。
-- `MikageKRKRSetSkippedMovies`、`MikageKRKRSetExperimentalEmote`、`MikageKRKRSetLogCallback`：跳过指定视频、选择 Emote 实现、接收引擎日志。
+- `MikageKRKRSetSkippedMovies`、`MikageKRKRSetLogCallback`：跳过指定视频、接收引擎日志。
 
 `KRKR_HOST_LIBRARY=ON` 时构建 `KRKRRuntime.framework`；为 `OFF`（默认）时仍构建原有的独立 iOS 程序。
 
