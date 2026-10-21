@@ -235,12 +235,18 @@ bool MikageKRKRSendBack(void);
 typedef enum MikageKRKRCommand {
     MikageKRKRCommandAuto = 1,
     MikageKRKRCommandSkip = 2,
+    MikageKRKRCommandQuickSave = 3,
+    MikageKRKRCommandQuickLoad = 4,
+    MikageKRKRCommandBacklog = 5,
 } MikageKRKRCommand;
 typedef enum MikageKRKRControl {
     MikageKRKRControlAuto = 1 << 0,
     MikageKRKRControlSkip = 1 << 1,
     MikageKRKRControlCanAuto = 1 << 8,
     MikageKRKRControlCanSkip = 1 << 9,
+    MikageKRKRControlCanQuickSave = 1 << 10,
+    MikageKRKRControlCanQuickLoad = 1 << 11,
+    MikageKRKRControlCanBacklog = 1 << 12,
 } MikageKRKRControl;
 // Main thread, between steps.
 bool MikageKRKRRunCommand(int32_t command);

@@ -597,14 +597,24 @@ tjs_int runKAGScript(const char *script)
     }
 }
 
-// The KAG3 entry points its own menu uses: auto mode, and "skip to the next
-// choice or unread text", which follows the game's read-skip rules.
+// The KAG3 entry points its own menu uses: auto mode, "skip to the next
+// choice or unread text" (which follows the game's read-skip rules), the
+// history layer, and bookmarks. Story commands wait for a stable conductor
+// (a click wait), as the menu items do.
 const char *const kKAGControls =
     "(typeof global.kag == 'undefined' || global.kag === void) ? 0 : ("
     "((typeof kag.enterAutoMode != 'undefined' && typeof kag.cancelAutoMode != 'undefined')"
     "  ? (0x100 | (kag.autoMode ? 1 : 0)) : 0) |"
     "((typeof kag.skipToStop != 'undefined' && typeof kag.cancelSkip != 'undefined')"
-    "  ? (0x200 | (kag.skipMode ? 2 : 0)) : 0))";
+    "  ? (0x200 | (kag.skipMode ? 2 : 0)) : 0) |"
+    "((typeof kag.inStable == 'undefined' || kag.inStable) ? ("
+    "  ((typeof kag.saveBookMark != 'undefined') ? 0x400 : 0) |"
+    "  ((typeof kag.loadBookMark != 'undefined' && typeof kag.bookMarkDates != 'undefined'"
+    "    && kag.bookMarkDates[999] !== void && kag.bookMarkDates[999] != '') ? 0x800 : 0) |"
+    "  ((typeof kag.showHistory != 'undefined'"
+    "    && (typeof kag.historyEnabled == 'undefined' || kag.historyEnabled)"
+    "    && (typeof kag.historyShowing == 'undefined' || !kag.historyShowing)) ? 0x1000 : 0)"
+    ") : 0))";
 
 const char *const kKAGToggleAuto =
     "(kag.autoMode ? kag.cancelAutoMode()"
@@ -613,6 +623,11 @@ const char *const kKAGToggleAuto =
 const char *const kKAGToggleSkip =
     "(kag.skipMode ? kag.cancelSkip()"
     " : ((kag.autoMode ? kag.cancelAutoMode() : 0), kag.skipToStop())), 1";
+
+// Bookmark 999: past the game's own slots, so its save menu never shows it.
+const char *const kKAGQuickSave = "(kag.saveBookMark(999) === false) ? 0 : 1";
+const char *const kKAGQuickLoad = "kag.loadBookMark(999), 1";
+const char *const kKAGBacklog = "kag.showHistory(), 1";
 
 } // namespace
 
@@ -630,6 +645,12 @@ extern "C" bool MikageKRKRRunCommand(int32_t command)
         done = runKAGScript(kKAGToggleAuto) == 1;
     else if (command == MikageKRKRCommandSkip && (controls & MikageKRKRControlCanSkip))
         done = runKAGScript(kKAGToggleSkip) == 1;
+    else if (command == MikageKRKRCommandQuickSave && (controls & MikageKRKRControlCanQuickSave))
+        done = runKAGScript(kKAGQuickSave) == 1;
+    else if (command == MikageKRKRCommandQuickLoad && (controls & MikageKRKRControlCanQuickLoad))
+        done = runKAGScript(kKAGQuickLoad) == 1;
+    else if (command == MikageKRKRCommandBacklog && (controls & MikageKRKRControlCanBacklog))
+        done = runKAGScript(kKAGBacklog) == 1;
     char message[64];
     std::snprintf(message, sizeof(message), "runtime.command.%d.%s", command, done ? "done" : "unavailable");
     MikageKRKRLogMessage("bridge", done ? 3 : 4, message);
