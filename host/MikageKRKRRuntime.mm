@@ -584,7 +584,7 @@ namespace {
 
 // Evaluates a TJS expression against the game's KAG system and returns its integer
 // result, or -1 when it threw (no KAG, or a system without these methods).
-tjs_int runKAGScript(const tjs_char *script)
+tjs_int runKAGScript(const char *script)
 {
     if (!MikageSDLHostIsRunning())
         return -1;
@@ -599,20 +599,20 @@ tjs_int runKAGScript(const tjs_char *script)
 
 // The KAG3 entry points its own menu uses: auto mode, and "skip to the next
 // choice or unread text", which follows the game's read-skip rules.
-const tjs_char *const kKAGControls = TJS_W(
+const char *const kKAGControls =
     "(typeof global.kag == 'undefined' || global.kag === void) ? 0 : ("
     "((typeof kag.enterAutoMode != 'undefined' && typeof kag.cancelAutoMode != 'undefined')"
     "  ? (0x100 | (kag.autoMode ? 1 : 0)) : 0) |"
     "((typeof kag.skipToStop != 'undefined' && typeof kag.cancelSkip != 'undefined')"
-    "  ? (0x200 | (kag.skipMode ? 2 : 0)) : 0))");
+    "  ? (0x200 | (kag.skipMode ? 2 : 0)) : 0))";
 
-const tjs_char *const kKAGToggleAuto = TJS_W(
+const char *const kKAGToggleAuto =
     "(kag.autoMode ? kag.cancelAutoMode()"
-    " : ((kag.skipMode ? kag.cancelSkip() : 0), kag.enterAutoMode())), 1");
+    " : ((kag.skipMode ? kag.cancelSkip() : 0), kag.enterAutoMode())), 1";
 
-const tjs_char *const kKAGToggleSkip = TJS_W(
+const char *const kKAGToggleSkip =
     "(kag.skipMode ? kag.cancelSkip()"
-    " : ((kag.autoMode ? kag.cancelAutoMode() : 0), kag.skipToStop())), 1");
+    " : ((kag.autoMode ? kag.cancelAutoMode() : 0), kag.skipToStop())), 1";
 
 } // namespace
 
