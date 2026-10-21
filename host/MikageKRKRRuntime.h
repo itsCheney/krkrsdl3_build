@@ -238,6 +238,8 @@ typedef enum MikageKRKRCommand {
     MikageKRKRCommandQuickSave = 3,
     MikageKRKRCommandQuickLoad = 4,
     MikageKRKRCommandBacklog = 5,
+    MikageKRKRCommandSave = 6,
+    MikageKRKRCommandLoad = 7,
 } MikageKRKRCommand;
 typedef enum MikageKRKRControl {
     MikageKRKRControlAuto = 1 << 0,
@@ -247,6 +249,8 @@ typedef enum MikageKRKRControl {
     MikageKRKRControlCanQuickSave = 1 << 10,
     MikageKRKRControlCanQuickLoad = 1 << 11,
     MikageKRKRControlCanBacklog = 1 << 12,
+    MikageKRKRControlCanSave = 1 << 13,
+    MikageKRKRControlCanLoad = 1 << 14,
 } MikageKRKRControl;
 // Main thread, between steps.
 bool MikageKRKRRunCommand(int32_t command);

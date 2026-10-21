@@ -625,23 +625,108 @@ const char *const kKAGToggleSkip =
     " : ((kag.autoMode ? kag.cancelAutoMode() : 0), kag.skipToStop())), 1";
 
 // Bookmark 999: past the game's own slots, so its save menu never shows it.
+// Only for games without a quick save of their own.
 const char *const kKAGQuickSave = "(kag.saveBookMark(999) === false) ? 0 : 1";
 const char *const kKAGQuickLoad = "kag.loadBookMark(999), 1";
 const char *const kKAGBacklog = "kag.showHistory(), 1";
+
+// KAGEX games route their system buttons and keys through the global
+// SystemAction table; its entries open the game's own screens (save and
+// load pages, its backlog) and run its own quick save and load.
+struct SystemActionCommand {
+    int32_t command;
+    uint32_t control;
+    std::vector<const char *> names;
+};
+
+const std::vector<SystemActionCommand> &systemActionCommands()
+{
+    static const std::vector<SystemActionCommand> commands = {
+        {MikageKRKRCommandQuickSave, MikageKRKRControlCanQuickSave, {"qsave", "quicksave", "quickSave"}},
+        {MikageKRKRCommandQuickLoad, MikageKRKRControlCanQuickLoad, {"qload", "quickload", "quickLoad"}},
+        {MikageKRKRCommandBacklog, MikageKRKRControlCanBacklog, {"history", "backlog", "log"}},
+        {MikageKRKRCommandSave, MikageKRKRControlCanSave, {"save"}},
+        {MikageKRKRCommandLoad, MikageKRKRControlCanLoad, {"load"}},
+    };
+    return commands;
+}
+
+// The SystemAction entry for a command, or "" when the game has none.
+std::string systemActionName(const SystemActionCommand &command)
+{
+    for (const char *name : command.names) {
+        const std::string probe = std::string("(typeof global.SystemAction != 'undefined' && SystemAction !== void"
+                                              " && typeof SystemAction.") + name + " != 'undefined'"
+                                              " && SystemAction." + name + " !== void) ? 1 : 0";
+        if (runKAGScript(probe.c_str()) == 1)
+            return name;
+    }
+    return {};
+}
+
+const SystemActionCommand *systemActionCommand(int32_t command)
+{
+    for (const SystemActionCommand &entry : systemActionCommands())
+        if (entry.command == command)
+            return &entry;
+    return nullptr;
+}
+
+// Once per game: the SystemAction entries, so a log shows what a game
+// offers when one of its screens doesn't open.
+void logSystemActions()
+{
+    static std::atomic<bool> logged{false};
+    if (logged.exchange(true) || !MikageSDLHostIsRunning())
+        return;
+    try {
+        tTJSVariant result;
+        TVPExecuteExpression(ttstr(
+            "(typeof global.SystemAction == 'undefined' || SystemAction === void) ? 'none'"
+            " : (function { var a = [], k = []; a.assign(SystemAction);"
+            " for (var i = 0; i < a.count; i += 2) k.add(a[i]); return k.join(','); } incontextof global)()"),
+            &result);
+        const std::string message = "systemActions " + std::string(ttstr(result).AsStdString());
+        MikageKRKRLogMessage("bridge", 3, message.c_str());
+    } catch (...) {
+        MikageKRKRLogMessage("bridge", 4, "systemActions unreadable");
+    }
+}
 
 } // namespace
 
 extern "C" uint32_t MikageKRKRGameControls(void)
 {
-    const tjs_int controls = runKAGScript(kKAGControls);
-    return controls > 0 ? (uint32_t)controls : 0;
+    tjs_int controls = runKAGScript(kKAGControls);
+    if (controls < 0)
+        controls = 0;
+    logSystemActions();
+    // A game's own entries win over the bookmark quick save and showHistory.
+    const bool stable = runKAGScript("(typeof global.kag == 'undefined' || kag === void"
+                                     " || typeof kag.inStable == 'undefined' || kag.inStable) ? 1 : 0") == 1;
+    for (const SystemActionCommand &entry : systemActionCommands()) {
+        if (systemActionName(entry).empty())
+            continue;
+        if (stable)
+            controls |= entry.control;
+        else
+            controls &= ~(tjs_int)entry.control;
+    }
+    return (uint32_t)controls;
 }
 
 extern "C" bool MikageKRKRRunCommand(int32_t command)
 {
     const uint32_t controls = MikageKRKRGameControls();
     bool done = false;
-    if (command == MikageKRKRCommandAuto && (controls & MikageKRKRControlCanAuto))
+    const char *how = "";
+    const SystemActionCommand *action = systemActionCommand(command);
+    const std::string name = action ? systemActionName(*action) : std::string();
+    if (!name.empty() && (controls & action->control)) {
+        const std::string script = "SystemAction." + name + "(), 1";
+        done = runKAGScript(script.c_str()) == 1;
+        how = ".systemAction";
+    } else if (command == MikageKRKRCommandAuto && (controls & MikageKRKRControlCanAuto))
         done = runKAGScript(kKAGToggleAuto) == 1;
     else if (command == MikageKRKRCommandSkip && (controls & MikageKRKRControlCanSkip))
         done = runKAGScript(kKAGToggleSkip) == 1;
@@ -651,8 +736,8 @@ extern "C" bool MikageKRKRRunCommand(int32_t command)
         done = runKAGScript(kKAGQuickLoad) == 1;
     else if (command == MikageKRKRCommandBacklog && (controls & MikageKRKRControlCanBacklog))
         done = runKAGScript(kKAGBacklog) == 1;
-    char message[64];
-    std::snprintf(message, sizeof(message), "runtime.command.%d.%s", command, done ? "done" : "unavailable");
+    char message[96];
+    std::snprintf(message, sizeof(message), "runtime.command.%d.%s%s", command, done ? "done" : "unavailable", how);
     MikageKRKRLogMessage("bridge", done ? 3 : 4, message);
     return done;
 }
@@ -662,9 +747,9 @@ extern "C" bool MikageKRKRSetControlSkip(bool held)
     if (!MikageSDLHostIsRunning())
         return false;
     if (held)
-        krkrsdl3::KRKR_Trig_KeyDown(VK_CONTROL);
+        krkrsdl3::KRKR_Trig_KeyDown(SDL_SCANCODE_LCTRL);
     else
-        krkrsdl3::KRKR_Trig_KeyUp(VK_CONTROL);
+        krkrsdl3::KRKR_Trig_KeyUp(SDL_SCANCODE_LCTRL);
     return true;
 }
 
