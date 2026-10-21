@@ -40,6 +40,10 @@ typedef struct MikageKRKRStats {
     double frameTimeMilliseconds;
     int32_t drawableWidth;
     int32_t drawableHeight;
+    // The game's own screen size, before letterboxing; 0 until the first
+    // frame. The host fits its overlays into the bars around it.
+    int32_t gameWidth;
+    int32_t gameHeight;
     char renderer[32];
     // frameTimeMilliseconds above remains the average frame interval.
     // Main-thread step wall time (includes script/decode and any GPU waits).

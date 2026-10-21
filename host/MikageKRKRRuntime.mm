@@ -839,6 +839,10 @@ extern "C" bool MikageKRKRGetStats(MikageKRKRStats *stats)
         stats->drawableWidth = width;
         stats->drawableHeight = height;
     }
+    if (const TVPSprite *sprite = krkrsdl3::KRKR_Get_Current_Sprite()) {
+        stats->gameWidth = sprite->width;
+        stats->gameHeight = sprite->height;
+    }
     std::strncpy(stats->renderer, activeRenderer.c_str(), sizeof(stats->renderer) - 1);
     return true;
 }
