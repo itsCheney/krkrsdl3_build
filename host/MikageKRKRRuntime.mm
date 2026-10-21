@@ -25,6 +25,9 @@
 #include "PointReadTrace.h"
 #include "LayerWorkDiagnostics.h"
 #include "LayerManager.h"
+#include "tjsCommHead.h"
+#include "TVPScript.h"
+#include "tvpinputdefs.h"
 #include "../cpp/plugins/emoteplayer/emoteperformance.h"
 
 namespace {
@@ -575,6 +578,105 @@ extern "C" bool MikageKRKRSendBack(void)
     const bool sent = MikageSDLHostSendBackKey();
     MikageKRKRLogMessage("bridge", sent ? 3 : 4, sent ? "runtime.back.sent" : "runtime.back.unavailable");
     return sent;
+}
+
+namespace {
+
+// Evaluates a TJS expression against the game's KAG system and returns its integer
+// result, or -1 when it threw (no KAG, or a system without these methods).
+tjs_int runKAGScript(const tjs_char *script)
+{
+    if (!MikageSDLHostIsRunning())
+        return -1;
+    try {
+        tTJSVariant result;
+        TVPExecuteExpression(ttstr(script), &result);
+        return result.Type() == tvtVoid ? 0 : (tjs_int)result.AsInteger();
+    } catch (...) {
+        return -1;
+    }
+}
+
+// The KAG3 entry points its own menu uses: auto mode, and "skip to the next
+// choice or unread text", which follows the game's read-skip rules.
+const tjs_char *const kKAGControls = TJS_W(
+    "(typeof global.kag == 'undefined' || global.kag === void) ? 0 : ("
+    "((typeof kag.enterAutoMode != 'undefined' && typeof kag.cancelAutoMode != 'undefined')"
+    "  ? (0x100 | (kag.autoMode ? 1 : 0)) : 0) |"
+    "((typeof kag.skipToStop != 'undefined' && typeof kag.cancelSkip != 'undefined')"
+    "  ? (0x200 | (kag.skipMode ? 2 : 0)) : 0))");
+
+const tjs_char *const kKAGToggleAuto = TJS_W(
+    "(kag.autoMode ? kag.cancelAutoMode()"
+    " : ((kag.skipMode ? kag.cancelSkip() : 0), kag.enterAutoMode())), 1");
+
+const tjs_char *const kKAGToggleSkip = TJS_W(
+    "(kag.skipMode ? kag.cancelSkip()"
+    " : ((kag.autoMode ? kag.cancelAutoMode() : 0), kag.skipToStop())), 1");
+
+} // namespace
+
+extern "C" uint32_t MikageKRKRGameControls(void)
+{
+    const tjs_int controls = runKAGScript(kKAGControls);
+    return controls > 0 ? (uint32_t)controls : 0;
+}
+
+extern "C" bool MikageKRKRRunCommand(int32_t command)
+{
+    const uint32_t controls = MikageKRKRGameControls();
+    bool done = false;
+    if (command == MikageKRKRCommandAuto && (controls & MikageKRKRControlCanAuto))
+        done = runKAGScript(kKAGToggleAuto) == 1;
+    else if (command == MikageKRKRCommandSkip && (controls & MikageKRKRControlCanSkip))
+        done = runKAGScript(kKAGToggleSkip) == 1;
+    char message[64];
+    std::snprintf(message, sizeof(message), "runtime.command.%d.%s", command, done ? "done" : "unavailable");
+    MikageKRKRLogMessage("bridge", done ? 3 : 4, message);
+    return done;
+}
+
+extern "C" bool MikageKRKRSetControlSkip(bool held)
+{
+    if (!MikageSDLHostIsRunning())
+        return false;
+    if (held)
+        krkrsdl3::KRKR_Trig_KeyDown(VK_CONTROL);
+    else
+        krkrsdl3::KRKR_Trig_KeyUp(VK_CONTROL);
+    return true;
+}
+
+extern "C" bool MikageKRKRSendPointer(int32_t phase, float x, float y)
+{
+    if (!MikageSDLHostIsForeground() || phase < 0 || phase > 4)
+        return false;
+    int count = 0;
+    SDL_Window **windows = SDL_GetWindows(&count);
+    SDL_Window *window = windows && count > 0 ? windows[0] : nullptr;
+    SDL_free(windows);
+    int width = 0, height = 0, pixelWidth = 0, pixelHeight = 0;
+    if (!window || !SDL_GetWindowSize(window, &width, &height) ||
+        !SDL_GetWindowSizeInPixels(window, &pixelWidth, &pixelHeight) || width <= 0 || height <= 0)
+        return false;
+    // Drawable pixels, as the touch handlers send them.
+    const int px = static_cast<int>(x * pixelWidth / width);
+    const int py = static_cast<int>(y * pixelHeight / height);
+    const tTVPMouseButton button = phase >= 3 ? mbRight : mbLeft;
+    switch (phase) {
+    case 0:
+        krkrsdl3::KRKR_Trig_MouseMove(px, py);
+        break;
+    case 1:
+    case 3:
+        krkrsdl3::KRKR_Trig_MouseMove(px, py);
+        krkrsdl3::KRKR_Trig_MouseDown(button, px, py);
+        break;
+    default:
+        krkrsdl3::KRKR_Trig_MouseUp(button, px, py);
+        break;
+    }
+    return true;
 }
 
 extern "C" void MikageKRKRRequestStop(void)

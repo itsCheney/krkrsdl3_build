@@ -229,6 +229,27 @@ bool MikageKRKRRequestExit(void);
 // Sends the game an Escape key press, for games whose only way back is the
 // keyboard. Delivered on the next step.
 bool MikageKRKRSendBack(void);
+// Quick actions and the game menu's playback controls. Auto and skip use
+// the KAG3 system's own entry points (kag.enterAutoMode, kag.skipToStop),
+// so games with a system of their own may not offer them.
+typedef enum MikageKRKRCommand {
+    MikageKRKRCommandAuto = 1,
+    MikageKRKRCommandSkip = 2,
+} MikageKRKRCommand;
+typedef enum MikageKRKRControl {
+    MikageKRKRControlAuto = 1 << 0,
+    MikageKRKRControlSkip = 1 << 1,
+    MikageKRKRControlCanAuto = 1 << 8,
+    MikageKRKRControlCanSkip = 1 << 9,
+} MikageKRKRControl;
+// Main thread, between steps.
+bool MikageKRKRRunCommand(int32_t command);
+uint32_t MikageKRKRGameControls(void);
+// Holds or releases Ctrl, which skips every line (read or not) while held.
+bool MikageKRKRSetControlSkip(bool held);
+// The host's trackpad cursor, as a mouse at x, y in window points.
+// phase: 0 move, 1 left down, 2 left up, 3 right down, 4 right up.
+bool MikageKRKRSendPointer(int32_t phase, float x, float y);
 // Forced host stop for interrupted startup/host lifecycle cleanup.
 void MikageKRKRRequestStop(void);
 bool MikageKRKRSetForeground(bool foreground);
