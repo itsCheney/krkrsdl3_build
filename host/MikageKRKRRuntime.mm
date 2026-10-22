@@ -1206,7 +1206,7 @@ void shareVisibleLayers()
     iTJSDispatch2 *depths = TJSCreateArrayObject();
     try {
         tTJSVariant base;
-        TVPExecuteExpression(TJS_W("(typeof global.kag != 'undefined' && kag !== void && typeof kag.fore != 'undefined')"
+        TVPExecuteExpression(ttstr("(typeof global.kag != 'undefined' && kag !== void && typeof kag.fore != 'undefined')"
                                    " ? kag.fore.base : void"),
                              &base);
         iTJSDispatch2 *object = base.Type() == tvtObject ? base.AsObjectNoAddRef() : nullptr;
@@ -1221,8 +1221,8 @@ void shareVisibleLayers()
     tTJSVariant layersValue(layers, layers), depthsValue(depths, depths);
     layers->Release();
     depths->Release();
-    global->PropSet(TJS_MEMBERENSURE, TJS_W("mikageLayers"), nullptr, &layersValue, global);
-    global->PropSet(TJS_MEMBERENSURE, TJS_W("mikageLayerDepths"), nullptr, &depthsValue, global);
+    global->PropSet(TJS_MEMBERENSURE, "mikageLayers", nullptr, &layersValue, global);
+    global->PropSet(TJS_MEMBERENSURE, "mikageLayerDepths", nullptr, &depthsValue, global);
     global->Release();
 }
 
