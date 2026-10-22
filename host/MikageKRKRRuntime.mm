@@ -1302,19 +1302,27 @@ bool runCommand(int32_t command)
     const std::string name = action ? systemActionName(*action) : std::string();
     std::vector<KAGLink> links = kagLinks();
     addKAGButtons(links);
+    // Turning auto or skip on the game's own way (its SystemAction entry,
+    // else its button) runs what the game adds to it: waiting for voices,
+    // its button states. Turning either off below is the same for every game.
+    const bool modeOn = (command == MikageKRKRCommandAuto && (controls & MikageKRKRControlCanAuto) &&
+                         !(controls & MikageKRKRControlAuto)) ||
+                        (command == MikageKRKRCommandSkip && (controls & MikageKRKRControlCanSkip) &&
+                         !(controls & MikageKRKRControlSkip));
+    const std::string modeAction = modeOn
+        ? systemActionName(command == MikageKRKRCommandAuto
+                               ? SystemActionCommand{command, MikageKRKRControlCanAuto, {"auto", "autoMode"}}
+                               : SystemActionCommand{command, MikageKRKRControlCanSkip, {"skip"}})
+        : std::string();
     if (!name.empty() && (controls & action->control)) {
         const std::string script = "SystemAction." + name + "(), 1";
         done = runKAGScript(script.c_str()) == 1;
         how = ".systemAction";
-    } else if (const KAGLink *own = (command == MikageKRKRCommandAuto && (controls & MikageKRKRControlCanAuto) &&
-                                      !(controls & MikageKRKRControlAuto)) ||
-                                             (command == MikageKRKRCommandSkip && (controls & MikageKRKRControlCanSkip) &&
-                                              !(controls & MikageKRKRControlSkip))
-                                         ? findLink(links, command)
-                                         : nullptr) {
-        // Turning auto or skip on with the game's own button runs what the
-        // game adds to it (waiting for voices, its button states); turning
-        // either off below is the same for every game.
+    } else if (!modeAction.empty()) {
+        const std::string script = "SystemAction." + modeAction + "(), 1";
+        done = runKAGScript(script.c_str()) == 1;
+        how = ".systemAction";
+    } else if (const KAGLink *own = modeOn ? findLink(links, command) : nullptr) {
         if (own->layer < 0) {
             done = pressButton(own->index);
             how = ".button";
