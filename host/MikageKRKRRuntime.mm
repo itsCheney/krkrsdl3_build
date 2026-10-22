@@ -1254,13 +1254,18 @@ bool pressButton(int index)
     const std::string script =
         "(function { var c = global.mikageButtons[" + std::to_string(index) + "];"
         " var x = c.width \\ 2, y = c.height \\ 2;"
-        " for (var l = c; l.parent !== void; l = l.parent) { x += l.left; y += l.top; }"
+        // The primary layer's parent is null, not void.
+        " for (var l = c; !l.isPrimary; l = l.parent) { x += l.left; y += l.top; }"
         " return x < 0 || y < 0 || x > 32767 || y > 32767 ? -1 : x * 65536 + y;"
         "} incontextof global)()";
     const tjs_int at = runKAGScript(script.c_str());
     TVPWindow *window = TVPGetActiveWindow();
-    if (at < 0 || !window)
+    if (!window)
+        window = TVPMainWindow;
+    if (at < 0 || !window) {
+        MikageKRKRLogMessage("bridge", 4, at < 0 ? "pressButton.noPosition" : "pressButton.noWindow");
         return false;
+    }
     const tjs_int x = at >> 16, y = at & 0xffff;
     TVPPostInputEvent(new tTVPOnMouseDownInputEvent(window, x, y, mbLeft, ssLeft));
     TVPPostInputEvent(new tTVPOnClickInputEvent(window, x, y));
