@@ -11,6 +11,8 @@
 #include <string>
 #include <exception>
 #include <cstring>
+#include <sys/mman.h>
+#include <unistd.h>
 #include <vector>
 #include <atomic>
 #include <algorithm>
@@ -122,6 +124,8 @@ extern "C" void MikageKRKRSetStretchToScreen(bool enabled)
 }
 
 #include "TVPApplication.h"
+#include "TVPWindow.h"
+#include "PlatformThread.h"
 #include "tjsError.h"
 #include "tjsDebug.h"
 
@@ -528,21 +532,10 @@ extern "C" bool MikageKRKRStart(const char *gamePath,
     return true;
 }
 
-extern "C" MikageKRKRStepResult MikageKRKRStep(void)
-{
-    DiagnosticScriptTraceScope traceScope;
-    if (!MikageSDLHostIsRunning())
-        return MIKAGE_KRKR_STEP_IDLE;
-    krkrsdl3::cpu_frame::rawLine = [](const char* line) {MikageKRKRLogMessage("KRKR", 3, line);};
-    krkrsdl3::cpu_frame::captureStack = [](char* out, size_t bytes, unsigned frames) {
-        return diagnosticScriptOnVMThread() && TJS::TJSGetStackTraceUTF8(out, static_cast<tjs_uint>(bytes), frames);
-    };
-    krkrsdl3::cpu_frame::StepScope cpuStep;
-    struct StepDepth {
-        StepDepth() { ++stepDepth; }
-        ~StepDepth() { --stepDepth; }
-    } depth;
+namespace {
 
+MikageKRKRStepResult runStep()
+{
     try {
         return static_cast<MikageKRKRStepResult>(MikageSDLHostStep());
     } catch (const eTJSSilent &) {
@@ -559,6 +552,152 @@ extern "C" MikageKRKRStepResult MikageKRKRStep(void)
         MikageSDLHostFinish(SDL_APP_FAILURE, "Unknown C++ exception while stepping KRKR.");
     }
     return MIKAGE_KRKR_STEP_FAILED;
+}
+
+// True while a modal window's loop has handed the frame back to the host:
+// the script that opened it is still mid-call on the step stack.
+bool modalSuspended = false;
+
+#if defined(__aarch64__) && defined(__APPLE__)
+// Steps run on their own stack so a modal window (askYesNo, the quit
+// confirmation) can return each frame to the display link and resume on
+// the next one. Blocking the display link instead keeps UIKit from
+// delivering touches, so the dialog could never be answered.
+// arm64 Apple ABI: x19-x28, fp, lr and d8-d15 are what a switch must keep.
+extern "C" void mikage_krkr_fiber_switch(void **saveSP, void *loadSP);
+extern "C" void mikage_krkr_fiber_trampoline(void);
+asm(R"(
+.text
+.private_extern _mikage_krkr_fiber_switch
+.p2align 2
+_mikage_krkr_fiber_switch:
+    sub sp, sp, #160
+    stp x19, x20, [sp, #0]
+    stp x21, x22, [sp, #16]
+    stp x23, x24, [sp, #32]
+    stp x25, x26, [sp, #48]
+    stp x27, x28, [sp, #64]
+    stp x29, x30, [sp, #80]
+    stp d8, d9, [sp, #96]
+    stp d10, d11, [sp, #112]
+    stp d12, d13, [sp, #128]
+    stp d14, d15, [sp, #144]
+    mov x9, sp
+    str x9, [x0]
+    mov sp, x1
+    ldp x19, x20, [sp, #0]
+    ldp x21, x22, [sp, #16]
+    ldp x23, x24, [sp, #32]
+    ldp x25, x26, [sp, #48]
+    ldp x27, x28, [sp, #64]
+    ldp x29, x30, [sp, #80]
+    ldp d8, d9, [sp, #96]
+    ldp d10, d11, [sp, #112]
+    ldp d12, d13, [sp, #128]
+    ldp d14, d15, [sp, #144]
+    add sp, sp, #160
+    ret
+
+.private_extern _mikage_krkr_fiber_trampoline
+.p2align 2
+_mikage_krkr_fiber_trampoline:
+    mov x0, x20
+    blr x19
+    brk #0xf1
+)");
+
+constexpr size_t kStepStackSize = 16u << 20;
+void *stepStack = nullptr;
+void *stepStackPointer = nullptr;
+void *hostStackPointer = nullptr;
+bool onStepStack = false;
+MikageKRKRStepResult stepResult = MIKAGE_KRKR_STEP_IDLE;
+
+void toHost()
+{
+    mikage_krkr_fiber_switch(&stepStackPointer, hostStackPointer);
+}
+
+[[noreturn]] void stepMain(void *)
+{
+    for (;;) {
+        stepResult = runStep();
+        toHost();
+    }
+}
+
+bool prepareStepStack()
+{
+    void *stack = mmap(nullptr, kStepStackSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (stack == MAP_FAILED)
+        return false;
+    // The lowest page stays unmapped so an overflow faults instead of
+    // corrupting the heap.
+    mprotect(stack, getpagesize(), PROT_NONE);
+    stepStack = stack;
+    // The frame mikage_krkr_fiber_switch restores: x19-x28, fp, lr, d8-d15.
+    auto top = reinterpret_cast<uintptr_t>(stack) + kStepStackSize;
+    auto *frame = reinterpret_cast<uint64_t *>((top - 160) & ~uintptr_t(15));
+    std::memset(frame, 0, 160);
+    frame[0] = reinterpret_cast<uint64_t>(&stepMain);                      // x19
+    frame[11] = reinterpret_cast<uint64_t>(&mikage_krkr_fiber_trampoline); // lr
+    stepStackPointer = frame;
+    return true;
+}
+
+void modalYield()
+{
+    if (!onStepStack) {
+        TVPSleepFor(16);
+        return;
+    }
+    modalSuspended = true;
+    // In the background the dialog waits without drawing.
+    do {
+        stepResult = MIKAGE_KRKR_STEP_RUNNING;
+        toHost();
+    } while (!MikageSDLHostIsForeground() && !(Application && Application->IsTarminate()));
+    modalSuspended = false;
+}
+
+MikageKRKRStepResult resumeStep()
+{
+    // A nested run loop (an SDL event pump inside the step) can call back in.
+    if (onStepStack)
+        return MIKAGE_KRKR_STEP_RUNNING;
+    if (!stepStack) {
+        if (!prepareStepStack())
+            return runStep();
+        TVPHostModalYield = modalYield;
+    }
+    onStepStack = true;
+    mikage_krkr_fiber_switch(&hostStackPointer, stepStackPointer);
+    onStepStack = false;
+    return stepResult;
+}
+#else
+MikageKRKRStepResult resumeStep()
+{
+    return runStep();
+}
+#endif
+}
+
+extern "C" MikageKRKRStepResult MikageKRKRStep(void)
+{
+    DiagnosticScriptTraceScope traceScope;
+    if (!MikageSDLHostIsRunning() && !modalSuspended)
+        return MIKAGE_KRKR_STEP_IDLE;
+    krkrsdl3::cpu_frame::rawLine = [](const char* line) {MikageKRKRLogMessage("KRKR", 3, line);};
+    krkrsdl3::cpu_frame::captureStack = [](char* out, size_t bytes, unsigned frames) {
+        return diagnosticScriptOnVMThread() && TJS::TJSGetStackTraceUTF8(out, static_cast<tjs_uint>(bytes), frames);
+    };
+    krkrsdl3::cpu_frame::StepScope cpuStep;
+    struct StepDepth {
+        StepDepth() { ++stepDepth; }
+        ~StepDepth() { --stepDepth; }
+    } depth;
+    return resumeStep();
 }
 
 extern "C" bool MikageKRKRRequestExit(void)
@@ -823,6 +962,9 @@ const KAGLink *findLink(const std::vector<KAGLink> &links, int32_t command)
 
 extern "C" uint32_t MikageKRKRGameControls(void)
 {
+    // The game's own dialog is up; its script is mid-call.
+    if (modalSuspended)
+        return 0;
     tjs_int controls = runKAGScript(kKAGControls);
     if (controls < 0)
         controls = 0;
@@ -844,6 +986,8 @@ extern "C" uint32_t MikageKRKRGameControls(void)
 
 extern "C" bool MikageKRKRRunCommand(int32_t command)
 {
+    if (modalSuspended)
+        return false;
     const uint32_t controls = MikageKRKRGameControls();
     bool done = false;
     const char *how = "";
@@ -944,7 +1088,7 @@ extern "C" bool MikageKRKRSetForeground(bool value)
         // The engine's idle compact now saves system variables at most once a
         // minute. iOS may terminate a backgrounded app without onClose, so
         // persist them here unless script is mid-execution.
-        if (!value && MikageSDLHostIsRunning() && !stepDepth)
+        if (!value && MikageSDLHostIsRunning() && !stepDepth && !modalSuspended)
             TVPDoSaveSystemVariables();
         // The host deactivates the game (onDeactive) and its audio, or
         // reactivates them, through krkrEngine.
