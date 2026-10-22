@@ -1018,8 +1018,9 @@ const char *const kKAGTapWatch =
     "(function {"
     " if (typeof global.kag == 'undefined' || kag === void || typeof kag.fore == 'undefined') return 0;"
     " if (typeof global.mikageTap != 'undefined') return 1;"
-    " var down = kag.onMouseDown;"
-    " if (down === void) return 0;"
+    // TJS functions don't close over locals: what they call lives in global.
+    " if (kag.onMouseDown === void) return 0;"
+    " global.mikageTapDown = kag.onMouseDown;"
     " global.mikageTap = %[key: '', at: 0];"
     " global.mikageScreenKind = function {"
     "  var layers = kag.fore.messages;"
@@ -1067,8 +1068,8 @@ const char *const kKAGTapWatch =
     "  }"
     " };"
     " kag.onMouseDown = function (x, y, button, shift) {"
-    "  try { if (button == mbLeft) mikageLearnTap(x, y); } catch (e) {}"
-    "  return down(...);"
+    "  try { if (button == mbLeft) global.mikageLearnTap(x, y); } catch (e) {}"
+    "  return global.mikageTapDown(...);"
     " } incontextof kag;"
     " return 1;"
     "} incontextof global)()";
