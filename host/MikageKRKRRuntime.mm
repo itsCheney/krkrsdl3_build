@@ -972,6 +972,8 @@ const char *const kKAGButtons =
     "  var s = /save|セーブ|存档|保存/i.test(t), l = /load|ロード|读档|读取/i.test(t);"
     "  if (s && !l) return 'save';"
     "  if (l && !s) return 'load';"
+    "  if (/auto|オート|自動|自动/i.test(t)) return 'auto';"
+    "  if (/skip|スキップ|快进|快速翻页|跳过/i.test(t)) return 'skip';"
     "  return '';"
     " };"
     " var text = function (o, p) { try { var v = o[p]; return v === void ? '' : (string)v; } catch (e) { return ''; } };"
@@ -1012,8 +1014,9 @@ const char *const kKAGButtons =
 
 // Buttons that say nothing about themselves are learned from the player's
 // own taps: a tap on a button layer followed by a save or load screen
-// (its links, as kKAGLinks reads them) marks that button, by its place
-// and size, in the game's system variables (sf.mikageButtonKinds).
+// (its links, as kKAGLinks reads them), or that turns auto or skip on,
+// marks that button, by its place and size, in the game's system
+// variables (sf.mikageButtonKinds).
 const char *const kKAGTapWatch =
     "(function {"
     " if (typeof global.kag == 'undefined' || kag === void || typeof kag.fore == 'undefined') return 0;"
@@ -1039,14 +1042,29 @@ const char *const kKAGTapWatch =
     "  }"
     "  return '';"
     " };"
+    " global.mikageRemember = function (key, kind) {"
+    "  if (kag.scflags.mikageButtonKinds === void) kag.scflags.mikageButtonKinds = %[];"
+    "  if (kag.scflags.mikageButtonKinds[key] != kind) Debug.message('mikage.buttonLearned ' + key + ' ' + kind);"
+    "  kag.scflags.mikageButtonKinds[key] = kind;"
+    " };"
+    // A button whose tap turns auto or skip on, within the same tap.
+    " global.mikageLearnMode = function (kind) {"
+    "  var tap = mikageTap;"
+    "  if (tap.key != '' && System.getTickCount() - tap.at < 1000) mikageRemember(tap.key, kind);"
+    "  tap.key = '';"
+    " };"
+    " if (kag.enterAutoMode !== void) {"
+    "  global.mikageAutoEnter = kag.enterAutoMode;"
+    "  kag.enterAutoMode = function { try { global.mikageLearnMode('auto'); } catch (e) {} return global.mikageAutoEnter(...); } incontextof kag;"
+    " }"
+    " if (kag.skipToStop !== void) {"
+    "  global.mikageSkipEnter = kag.skipToStop;"
+    "  kag.skipToStop = function { try { global.mikageLearnMode('skip'); } catch (e) {} return global.mikageSkipEnter(...); } incontextof kag;"
+    " }"
     " global.mikageLearnTap = function (x, y) {"
     "  var tap = mikageTap, shown = mikageScreenKind(), now = System.getTickCount();"
     "  if (shown != '') {"
-    "   if (tap.key != '' && now - tap.at < 15000) {"
-    "    if (kag.scflags.mikageButtonKinds === void) kag.scflags.mikageButtonKinds = %[];"
-    "    if (kag.scflags.mikageButtonKinds[tap.key] != shown) Debug.message('mikage.buttonLearned ' + tap.key + ' ' + shown);"
-    "    kag.scflags.mikageButtonKinds[tap.key] = shown;"
-    "   }"
+    "   if (tap.key != '' && now - tap.at < 15000) mikageRemember(tap.key, shown);"
     "   tap.key = '';"
     "   return;"
     "  }"
@@ -1131,6 +1149,8 @@ const char *linkKind(int32_t command)
     case MikageKRKRCommandLoad: return "load";
     case MikageKRKRCommandQuickSave: return "qsave";
     case MikageKRKRCommandQuickLoad: return "qload";
+    case MikageKRKRCommandAuto: return "auto";
+    case MikageKRKRCommandSkip: return "skip";
     default: return nullptr;
     }
 }
@@ -1286,6 +1306,24 @@ bool runCommand(int32_t command)
         const std::string script = "SystemAction." + name + "(), 1";
         done = runKAGScript(script.c_str()) == 1;
         how = ".systemAction";
+    } else if (const KAGLink *own = (command == MikageKRKRCommandAuto && (controls & MikageKRKRControlCanAuto) &&
+                                      !(controls & MikageKRKRControlAuto)) ||
+                                             (command == MikageKRKRCommandSkip && (controls & MikageKRKRControlCanSkip) &&
+                                              !(controls & MikageKRKRControlSkip))
+                                         ? findLink(links, command)
+                                         : nullptr) {
+        // Turning auto or skip on with the game's own button runs what the
+        // game adds to it (waiting for voices, its button states); turning
+        // either off below is the same for every game.
+        if (own->layer < 0) {
+            done = pressButton(own->index);
+            how = ".button";
+        } else {
+            const std::string script = "kag.fore.messages[" + std::to_string(own->layer) + "].processLink(" +
+                                       std::to_string(own->index) + "), 1";
+            done = runKAGScript(script.c_str()) == 1;
+            how = ".link";
+        }
     } else if (const KAGLink *link = (controls & (action ? action->control : 0)) ? findLink(links, command) : nullptr) {
         // As a click on the game's own button.
         if (link->layer < 0) {
