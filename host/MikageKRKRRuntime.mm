@@ -908,6 +908,17 @@ const char *const kKAGButtons =
     "  return '';"
     " };"
     " var text = function (o, p) { try { var v = o[p]; return v === void ? '' : (string)v; } catch (e) { return ''; } };"
+    // The button's own text and number members (a plugin's file names,
+    // labels, actions), for buttons that set no name, hint or exp.
+    " var members = function (o) {"
+    "  var d = %[], a = [], s = '';"
+    "  try { (Dictionary.assign incontextof d)(o, false); a.assign(d); } catch (e) { return ''; }"
+    "  for (var j = 0; j + 1 < a.count && s.length < 200; j += 2) {"
+    "   var t = typeof a[j + 1];"
+    "   if (t == 'String' || t == 'Integer' || t == 'Real') s += a[j] + '=' + ((string)a[j + 1]).substring(0, 32) + ';';"
+    "  }"
+    "  return s;"
+    " };"
     " global.mikageButtons = [];"
     " var out = [], stack = [kag.fore.base];"
     " while (stack.count && global.mikageButtons.count < 64) {"
@@ -917,11 +928,12 @@ const char *const kKAGButtons =
     "   if (c === void || !c.visible) continue;"
     "   if (c instanceof 'MessageLayer') continue;"
     "   if (c instanceof 'ButtonLayer' && !(c instanceof 'LinkButtonLayer')) {"
-    "    var d = text(c, 'name') + ' ' + text(c, 'hint') + ' ' + text(c, 'exp') + ' ' + text(c, 'target') + ' ' + text(c, 'storage');"
+    "    var own = members(c);"
+    "    var d = text(c, 'name') + ' ' + text(c, 'hint') + ' ' + text(c, 'exp') + ' ' + text(c, 'target') + ' ' + text(c, 'storage') + ' ' + own;"
     "    var k = classify(text(c, 'name')); if (k == '') k = classify(text(c, 'hint'));"
     "    if (k == '') k = classify(text(c, 'exp')); if (k == '') k = classify(text(c, 'target'));"
-    "    if (k == '') k = classify(text(c, 'storage'));"
-    "    out.add(k + ',' + global.mikageButtons.count + ',' + d);"
+    "    if (k == '') k = classify(text(c, 'storage')); if (k == '') k = classify(own);"
+    "    out.add(k + ',' + global.mikageButtons.count + ',' + d.replace(/\\|/g, '/'));"
     "    global.mikageButtons.add(c);"
     "   }"
     "   stack.add(c);"
@@ -1031,8 +1043,10 @@ void addKAGButtons(std::vector<KAGLink> &links)
     const std::string all = runKAGString(kKAGButtons);
     if (all != loggedButtons) {
         loggedButtons = all;
-        const std::string message = "kagButtons " + all.substr(0, 900);
-        MikageKRKRLogMessage("bridge", 3, message.c_str());
+        for (size_t at = 0, part = 0; at < all.size() && part < 6; at += 900, ++part) {
+            const std::string message = "kagButtons " + all.substr(at, 900);
+            MikageKRKRLogMessage("bridge", 3, message.c_str());
+        }
     }
     size_t start = 0;
     while (start < all.size()) {
