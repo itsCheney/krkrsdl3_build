@@ -24,9 +24,11 @@
 - `MikageKRKRSetForeground`：切换前后台；进入后台时保存系统变量。
 - `MikageKRKRGetStats` 及各类 profile 函数：帧率、CPU/GPU 时间、图层工作量等性能数据。
 - `MikageKRKRCaptureFrame`：截取当前画面。
-- `MikageKRKRSetSkippedMovies`、`MikageKRKRSetExperimentalEmote`、`MikageKRKRSetLogCallback`：跳过指定视频、选择 Emote 实现、接收引擎日志。
+- `MikageKRKRSetSkippedMovies`、`MikageKRKRSetLogCallback`：跳过指定视频、接收引擎日志。
 
 `KRKR_HOST_LIBRARY=ON` 时构建 `KRKRRuntime.framework`；为 `OFF`（默认）时仍构建原有的独立 iOS 程序。
+
+framework 构建还需要 `MIKAGE_SDL_HOST_DIR` 指向 Mikage Next 的 `Engine/MikageSDLHost`。那是各个 SDL 引擎共用的宿主层：SDL 主回调的逐帧驱动、停止与前后台、音频会话和每局之间的复位都在那里，`MikageKRKRRuntime.mm` 只保留 KRKR 自己的部分。
 
 ## 构建
 
@@ -38,7 +40,8 @@ cd krkrsdl3_build
 export VCPKG_ROOT=/path/to/vcpkg
 
 # 嵌入式 framework（Mikage 使用的方式）
-cmake --preset "iOS Device Config" -DKRKR_HOST_LIBRARY=ON -DUSE_RENDER_METAL=ON
+cmake --preset "iOS Device Config" -DKRKR_HOST_LIBRARY=ON -DUSE_RENDER_METAL=ON \
+    -DMIKAGE_SDL_HOST_DIR=/path/to/Mikage-Next/Engine/MikageSDLHost
 cmake --build out/ios-device --config Release --parallel
 
 # 独立的 iOS 程序
