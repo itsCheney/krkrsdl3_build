@@ -127,6 +127,8 @@ extern "C" void MikageKRKRSetStretchToScreen(bool enabled)
 #include "TVPApplication.h"
 #include "TVPWindow.h"
 #include "TVPEvent.h"
+#include "tjsNativeLayer.h"
+#include "tjsArray.h"
 #include "PlatformThread.h"
 #include "tjsError.h"
 #include "tjsDebug.h"
@@ -977,37 +979,23 @@ const char *const kKAGButtons =
     "  return '';"
     " };"
     " var text = function (o, p) { try { var v = o[p]; return v === void ? '' : (string)v; } catch (e) { return ''; } };"
-    // The button's own non-empty text members (a plugin's file names,
-    // labels, actions), for buttons that set no name, hint or exp.
-    " var members = function (o) {"
-    "  var d = %[], a = [], s = '';"
-    "  try { (Dictionary.assign incontextof d)(o, false); a.assign(d); } catch (e) { return ''; }"
-    "  for (var j = 0; j + 1 < a.count && s.length < 400; j += 2) {"
-    "   if (typeof a[j + 1] == 'String' && a[j + 1] != '') s += a[j] + '=' + a[j + 1].substring(0, 48) + ';';"
-    "  }"
-    "  return s;"
-    " };"
     " global.mikageButtons = [];"
+    " if (typeof global.mikageLayers == 'undefined') return '';"
     " var learned = typeof kag.scflags != 'undefined' && kag.scflags !== void ? kag.scflags.mikageButtonKinds : void;"
-    " var out = [], stack = [kag.fore.base];"
-    " while (stack.count && global.mikageButtons.count < 64) {"
-    "  var l = stack.pop();"
-    "  for (var i = 0; i < l.children.count; i++) {"
-    "   var c = l.children[i];"
-    "   if (c === void || !c.visible) continue;"
-    "   if (c instanceof 'MessageLayer') continue;"
+    " var out = [], layers = global.mikageLayers;"
+    " for (var i = 0; i < layers.count && global.mikageButtons.count < 64; i++) {"
+    "   var c = layers[i], inMessage = false;"
+    "   for (var p = c; p && !p.isPrimary; p = p.parent) if (p instanceof 'MessageLayer') { inMessage = true; break; }"
+    "   if (inMessage) continue;"
     "   if (c instanceof 'ButtonLayer' && !(c instanceof 'LinkButtonLayer')) {"
-    "    var own = members(c);"
-    "    var d = text(c, 'name') + ' ' + text(c, 'hint') + ' ' + text(c, 'exp') + ' ' + text(c, 'target') + ' ' + text(c, 'storage') + ' ' + own;"
+    "    var d = text(c, 'name') + ' ' + text(c, 'hint') + ' ' + text(c, 'exp') + ' ' + text(c, 'target') + ' ' + text(c, 'storage');"
     "    var k = classify(text(c, 'name')); if (k == '') k = classify(text(c, 'hint'));"
     "    if (k == '') k = classify(text(c, 'exp')); if (k == '') k = classify(text(c, 'target'));"
-    "    if (k == '') k = classify(text(c, 'storage')); if (k == '') k = classify(own);"
+    "    if (k == '') k = classify(text(c, 'storage'));"
     "    if (k == '' && learned !== void) { var lk = learned[c.left + ',' + c.top + ',' + c.width + ',' + c.height]; if (lk !== void) k = lk; }"
     "    out.add(k + ',' + global.mikageButtons.count + ',' + d.replace(/\\|/g, '/'));"
     "    global.mikageButtons.add(c);"
     "   }"
-    "   stack.add(c);"
-    "  }"
     " }"
     " return out.join('|');"
     "} incontextof global)()";
@@ -1093,17 +1081,13 @@ const char *const kKAGLayerTree =
     "(function {"
     " if (typeof global.kag == 'undefined' || kag === void || typeof kag.fore == 'undefined') return '';"
     " var text = function (o, p) { try { var v = o[p]; return v === void ? '' : (string)v; } catch (e) { return ''; } };"
-    " var out = [], stack = [kag.fore.base], depth = [0];"
-    " while (stack.count && out.count < 80) {"
-    "  var l = stack.pop(), dl = depth.pop();"
-    "  for (var i = 0; i < l.children.count; i++) {"
-    "   var c = l.children[i];"
-    "   if (c === void || !c.visible) continue;"
+    " if (typeof global.mikageLayers == 'undefined') return '';"
+    " var out = [], layers = global.mikageLayers, depths = global.mikageLayerDepths;"
+    " for (var i = 0; i < layers.count && out.count < 80; i++) {"
+    "   var c = layers[i];"
     "   var t = c instanceof 'MessageLayer' ? 'M' + text(c, 'numLinks') : (c instanceof 'ButtonLayer' ? 'B' : 'L');"
     "   var e = text(c, 'exp') + text(c, 'target') + text(c, 'storage');"
-    "   out.add(dl + t + ':' + text(c, 'name') + '@' + c.left + ',' + c.top + ',' + c.width + 'x' + c.height + (e != '' ? ':' + e : ''));"
-    "   stack.add(c); depth.add(dl + 1);"
-    "  }"
+    "   out.add(depths[i] + t + ':' + text(c, 'name') + '@' + c.left + ',' + c.top + ',' + c.width + 'x' + c.height + (e != '' ? ':' + e : ''));"
     " }"
     " return out.join(' ');"
     "} incontextof global)()";
@@ -1191,11 +1175,63 @@ const KAGLink *findLink(const std::vector<KAGLink> &links, int32_t command)
     return nullptr;
 }
 
-// The game owns its layers' lifetimes: the found buttons are let go as soon
-// as a query or press is done with them.
+void collectVisibleLayers(tTJSNI_BaseLayer *layer, tjs_int depth, iTJSDispatch2 *layers, iTJSDispatch2 *depths,
+                          tjs_int &count)
+{
+    const tjs_int children = (tjs_int)layer->GetCount();
+    for (tjs_int i = 0; i < children && count < 512; i++) {
+        tTJSNI_BaseLayer *child = layer->GetChildren(i);
+        iTJSDispatch2 *owner = child ? child->GetOwnerNoAddRef() : nullptr;
+        if (!owner || !child->GetVisible())
+            continue;
+        tTJSVariant value(owner, owner), level(depth);
+        layers->PropSetByNum(TJS_MEMBERENSURE, count, &value, layers);
+        depths->PropSetByNum(TJS_MEMBERENSURE, count, &level, depths);
+        ++count;
+        collectVisibleLayers(child, depth + 1, layers, depths, count);
+    }
+}
+
+// The visible layers under kag.fore.base in tree order, as
+// global.mikageLayers (their depths in global.mikageLayerDepths), walked
+// natively: reading Layer.children from script makes each layer keep an
+// array holding its children, which dangles once a plugin frees a layer
+// of its own (a KRKR crash while skipping through Emote scenes).
+void shareVisibleLayers()
+{
+    iTJSDispatch2 *global = TVPGetScriptDispatch();
+    if (!global)
+        return;
+    iTJSDispatch2 *layers = TJSCreateArrayObject();
+    iTJSDispatch2 *depths = TJSCreateArrayObject();
+    try {
+        tTJSVariant base;
+        TVPExecuteExpression(TJS_W("(typeof global.kag != 'undefined' && kag !== void && typeof kag.fore != 'undefined')"
+                                   " ? kag.fore.base : void"),
+                             &base);
+        iTJSDispatch2 *object = base.Type() == tvtObject ? base.AsObjectNoAddRef() : nullptr;
+        tTJSNI_BaseLayer *root = nullptr;
+        if (object && TJS_SUCCEEDED(object->NativeInstanceSupport(TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+                                                                  (iTJSNativeInstance **)&root)) && root) {
+            tjs_int count = 0;
+            collectVisibleLayers(root, 0, layers, depths, count);
+        }
+    } catch (...) {
+    }
+    tTJSVariant layersValue(layers, layers), depthsValue(depths, depths);
+    layers->Release();
+    depths->Release();
+    global->PropSet(TJS_MEMBERENSURE, TJS_W("mikageLayers"), nullptr, &layersValue, global);
+    global->PropSet(TJS_MEMBERENSURE, TJS_W("mikageLayerDepths"), nullptr, &depthsValue, global);
+    global->Release();
+}
+
+// The game owns its layers' lifetimes: the found buttons and layers are
+// let go as soon as a query or press is done with them.
 void releaseKAGButtons()
 {
-    runKAGScript("(typeof global.mikageButtons != 'undefined') ? (global.mikageButtons = [], 1) : 0");
+    runKAGScript("(typeof global.mikageButtons != 'undefined')"
+                 " ? (global.mikageButtons = [], global.mikageLayers = [], global.mikageLayerDepths = [], 1) : 0");
 }
 
 // Button layers, as links with layer -1 (index into global.mikageButtons).
@@ -1204,6 +1240,9 @@ void releaseKAGButtons()
 void addKAGButtons(std::vector<KAGLink> &links)
 {
     static std::string loggedButtons, loggedTree;
+    if (!MikageSDLHostIsRunning())
+        return;
+    shareVisibleLayers();
     const std::string all = runKAGString(kKAGButtons);
     if (all != loggedButtons) {
         loggedButtons = all;
