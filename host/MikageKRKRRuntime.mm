@@ -534,8 +534,22 @@ extern "C" bool MikageKRKRStart(const char *gamePath,
 
 namespace {
 
+// Runs on the step stack. The diagnostics scopes live here, not around the
+// switch: VM call scopes link to the step's scope, and a modal window can
+// suspend them across frames.
 MikageKRKRStepResult runStep()
 {
+    DiagnosticScriptTraceScope traceScope;
+    krkrsdl3::cpu_frame::rawLine = [](const char* line) {MikageKRKRLogMessage("KRKR", 3, line);};
+    krkrsdl3::cpu_frame::captureStack = [](char* out, size_t bytes, unsigned frames) {
+        return diagnosticScriptOnVMThread() && TJS::TJSGetStackTraceUTF8(out, static_cast<tjs_uint>(bytes), frames);
+    };
+    krkrsdl3::cpu_frame::StepScope cpuStep;
+    // Stays raised while a modal window waits: its script is mid-call.
+    struct StepDepth {
+        StepDepth() { ++stepDepth; }
+        ~StepDepth() { --stepDepth; }
+    } depth;
     try {
         return static_cast<MikageKRKRStepResult>(MikageSDLHostStep());
     } catch (const eTJSSilent &) {
@@ -685,18 +699,8 @@ MikageKRKRStepResult resumeStep()
 
 extern "C" MikageKRKRStepResult MikageKRKRStep(void)
 {
-    DiagnosticScriptTraceScope traceScope;
     if (!MikageSDLHostIsRunning() && !modalSuspended)
         return MIKAGE_KRKR_STEP_IDLE;
-    krkrsdl3::cpu_frame::rawLine = [](const char* line) {MikageKRKRLogMessage("KRKR", 3, line);};
-    krkrsdl3::cpu_frame::captureStack = [](char* out, size_t bytes, unsigned frames) {
-        return diagnosticScriptOnVMThread() && TJS::TJSGetStackTraceUTF8(out, static_cast<tjs_uint>(bytes), frames);
-    };
-    krkrsdl3::cpu_frame::StepScope cpuStep;
-    struct StepDepth {
-        StepDepth() { ++stepDepth; }
-        ~StepDepth() { --stepDepth; }
-    } depth;
     return resumeStep();
 }
 
@@ -887,6 +891,66 @@ const char *const kKAGLinks =
     " return out.join('|');"
     "} incontextof global)()";
 
+// Buttons that are their own layers (ButtonLayer subclasses, as system
+// button plugins make) rather than links on a message layer. Each found
+// button is kept in global.mikageButtons for the click; returns
+// "kind,index,name hint exp target storage" joined by '|'.
+const char *const kKAGButtons =
+    "(function {"
+    " if (typeof global.kag == 'undefined' || kag === void || typeof kag.fore == 'undefined') return '';"
+    " var classify = function (t) {"
+    "  if (t == '') return '';"
+    "  if (/q(uick)?[_ ]?save|クイックセーブ|快速存档|快速保存/i.test(t)) return 'qsave';"
+    "  if (/q(uick)?[_ ]?load|クイックロード|快速读档|快速读取/i.test(t)) return 'qload';"
+    "  var s = /save|セーブ|存档|保存/i.test(t), l = /load|ロード|读档|读取/i.test(t);"
+    "  if (s && !l) return 'save';"
+    "  if (l && !s) return 'load';"
+    "  return '';"
+    " };"
+    " var text = function (o, p) { try { var v = o[p]; return v === void ? '' : (string)v; } catch (e) { return ''; } };"
+    " global.mikageButtons = [];"
+    " var out = [], stack = [kag.fore.base];"
+    " while (stack.count && global.mikageButtons.count < 64) {"
+    "  var l = stack.pop();"
+    "  for (var i = 0; i < l.children.count; i++) {"
+    "   var c = l.children[i];"
+    "   if (c === void || !c.visible) continue;"
+    "   if (c instanceof 'MessageLayer') continue;"
+    "   if (c instanceof 'ButtonLayer' && !(c instanceof 'LinkButtonLayer')) {"
+    "    var d = text(c, 'name') + ' ' + text(c, 'hint') + ' ' + text(c, 'exp') + ' ' + text(c, 'target') + ' ' + text(c, 'storage');"
+    "    var k = classify(text(c, 'name')); if (k == '') k = classify(text(c, 'hint'));"
+    "    if (k == '') k = classify(text(c, 'exp')); if (k == '') k = classify(text(c, 'target'));"
+    "    if (k == '') k = classify(text(c, 'storage'));"
+    "    out.add(k + ',' + global.mikageButtons.count + ',' + d);"
+    "    global.mikageButtons.add(c);"
+    "   }"
+    "   stack.add(c);"
+    "  }"
+    " }"
+    " return out.join('|');"
+    "} incontextof global)()";
+
+// What the screen is made of, for games whose buttons none of the above
+// find: visible layers under the base (M message, B button, L other).
+const char *const kKAGLayerTree =
+    "(function {"
+    " if (typeof global.kag == 'undefined' || kag === void || typeof kag.fore == 'undefined') return '';"
+    " var text = function (o, p) { try { var v = o[p]; return v === void ? '' : (string)v; } catch (e) { return ''; } };"
+    " var out = [], stack = [kag.fore.base], depth = [0];"
+    " while (stack.count && out.count < 80) {"
+    "  var l = stack.pop(), dl = depth.pop();"
+    "  for (var i = 0; i < l.children.count; i++) {"
+    "   var c = l.children[i];"
+    "   if (c === void || !c.visible) continue;"
+    "   var t = c instanceof 'MessageLayer' ? 'M' + text(c, 'numLinks') : (c instanceof 'ButtonLayer' ? 'B' : 'L');"
+    "   var e = text(c, 'exp') + text(c, 'target') + text(c, 'storage');"
+    "   out.add(dl + t + ':' + text(c, 'name') + '@' + c.left + ',' + c.top + ',' + c.width + 'x' + c.height + (e != '' ? ':' + e : ''));"
+    "   stack.add(c); depth.add(dl + 1);"
+    "  }"
+    " }"
+    " return out.join(' ');"
+    "} incontextof global)()";
+
 std::string runKAGString(const char *script)
 {
     if (!MikageSDLHostIsRunning())
@@ -958,6 +1022,46 @@ const KAGLink *findLink(const std::vector<KAGLink> &links, int32_t command)
     return nullptr;
 }
 
+// Button layers, as links with layer -1 (index into global.mikageButtons).
+// Also logs the layer tree once per screen while no save or load button
+// is known, so the next unknown game says what its buttons are.
+void addKAGButtons(std::vector<KAGLink> &links)
+{
+    static std::string loggedButtons, loggedTree;
+    const std::string all = runKAGString(kKAGButtons);
+    if (all != loggedButtons) {
+        loggedButtons = all;
+        const std::string message = "kagButtons " + all.substr(0, 900);
+        MikageKRKRLogMessage("bridge", 3, message.c_str());
+    }
+    size_t start = 0;
+    while (start < all.size()) {
+        size_t end = all.find('|', start);
+        if (end == std::string::npos)
+            end = all.size();
+        const std::string entry = all.substr(start, end - start);
+        start = end + 1;
+        const size_t a = entry.find(',');
+        const size_t b = a == std::string::npos ? a : entry.find(',', a + 1);
+        if (b == std::string::npos || a == 0)
+            continue;
+        links.push_back({entry.substr(0, a), -1, std::atoi(entry.substr(a + 1, b - a - 1).c_str())});
+    }
+    bool known = false;
+    for (const KAGLink &link : links)
+        known |= link.kind == "save" || link.kind == "load";
+    if (known)
+        return;
+    const std::string tree = runKAGString(kKAGLayerTree);
+    if (tree == loggedTree)
+        return;
+    loggedTree = tree;
+    for (size_t at = 0, part = 0; at < tree.size() && part < 6; at += 900, ++part) {
+        const std::string message = "kagLayers " + tree.substr(at, 900);
+        MikageKRKRLogMessage("bridge", 3, message.c_str());
+    }
+}
+
 } // namespace
 
 extern "C" uint32_t MikageKRKRGameControls(void)
@@ -972,7 +1076,8 @@ extern "C" uint32_t MikageKRKRGameControls(void)
     // A game's own entries win over the bookmark quick save and showHistory.
     const bool stable = runKAGScript("(typeof global.kag == 'undefined' || kag === void"
                                      " || typeof kag.inStable == 'undefined' || kag.inStable) ? 1 : 0") == 1;
-    const std::vector<KAGLink> links = kagLinks();
+    std::vector<KAGLink> links = kagLinks();
+    addKAGButtons(links);
     for (const SystemActionCommand &entry : systemActionCommands()) {
         if (systemActionName(entry).empty() && !findLink(links, entry.command))
             continue;
@@ -993,15 +1098,18 @@ extern "C" bool MikageKRKRRunCommand(int32_t command)
     const char *how = "";
     const SystemActionCommand *action = systemActionCommand(command);
     const std::string name = action ? systemActionName(*action) : std::string();
-    const std::vector<KAGLink> links = kagLinks();
+    std::vector<KAGLink> links = kagLinks();
+    addKAGButtons(links);
     if (!name.empty() && (controls & action->control)) {
         const std::string script = "SystemAction." + name + "(), 1";
         done = runKAGScript(script.c_str()) == 1;
         how = ".systemAction";
     } else if (const KAGLink *link = (controls & (action ? action->control : 0)) ? findLink(links, command) : nullptr) {
         // As a click on the game's own button.
-        const std::string script = "kag.fore.messages[" + std::to_string(link->layer) + "].processLink(" +
-                                   std::to_string(link->index) + "), 1";
+        const std::string script = link->layer < 0
+            ? "global.mikageButtons[" + std::to_string(link->index) + "].onClick(0, 0), 1"
+            : "kag.fore.messages[" + std::to_string(link->layer) + "].processLink(" +
+              std::to_string(link->index) + "), 1";
         done = runKAGScript(script.c_str()) == 1;
         how = ".link";
     } else if (command == MikageKRKRCommandAuto && (controls & MikageKRKRControlCanAuto))
@@ -1088,7 +1196,7 @@ extern "C" bool MikageKRKRSetForeground(bool value)
         // The engine's idle compact now saves system variables at most once a
         // minute. iOS may terminate a backgrounded app without onClose, so
         // persist them here unless script is mid-execution.
-        if (!value && MikageSDLHostIsRunning() && !stepDepth && !modalSuspended)
+        if (!value && MikageSDLHostIsRunning() && !stepDepth)
             TVPDoSaveSystemVariables();
         // The host deactivates the game (onDeactive) and its audio, or
         // reactivates them, through krkrEngine.
