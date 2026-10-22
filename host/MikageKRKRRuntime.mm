@@ -335,8 +335,22 @@ void recordFrame(Uint64 presentedAt, Uint64 workDuration,
 }
 
 // KRKR's side of the shared SDL host session (MikageSDLHost.h).
+// iOS asks the app to quit while the game may sit in a modal loop (its own
+// quit confirmation, for one). That loop only ends once the application is
+// terminating, so mark it as soon as SDL hears about it, from inside the
+// loop's own event pump; otherwise the watchdog kills the app after 5 s.
+bool SDLCALL watchTermination(void *, SDL_Event *event)
+{
+    if (event->type == SDL_EVENT_TERMINATING && Application) {
+        MikageKRKRLogMessage("bridge", 3, "runtime.terminating");
+        Application->Terminate();
+    }
+    return true;
+}
+
 SDL_AppResult hostInit(void **appstate, int argc, char *argv[])
 {
+    SDL_AddEventWatch(watchTermination, nullptr);
     SDL_AppResult result = SDL_AppInit(appstate, argc, argv);
     const char *actualRenderer = MikageKRKRGetActiveRendererName();
     if (actualRenderer && *actualRenderer)
@@ -372,6 +386,7 @@ SDL_AppResult hostIterate(void *appstate)
 
 SDL_AppResult hostQuit(void *appstate, SDL_AppResult result)
 {
+    SDL_RemoveEventWatch(watchTermination, nullptr);
     try {
         SDL_AppQuit(appstate, result);
     } catch (const eTJS &error) {
