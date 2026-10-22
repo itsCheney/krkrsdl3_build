@@ -16,7 +16,11 @@ if(IOS AND KRKR_HOST_LIBRARY)
     add_definitions(-DKRKR_HOST_LIBRARY=1)
     list(REMOVE_ITEM KRKRSDL_SRC
         ${KRKRSDL_ENVIRON_PATH}/${KRKRSDL_SDL_NAME}/${KRKRSDL_SDL_NAME}_entry.cpp)
-    list(APPEND KRKRSDL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/host/MikageKRKRRuntime.mm)
+    list(APPEND KRKRSDL_SRC
+        ${CMAKE_CURRENT_SOURCE_DIR}/host/MikageKRKRRuntime.mm
+        ${MIKAGE_SDL_HOST_DIR}/MikageSDLHost.cpp
+        ${MIKAGE_SDL_HOST_DIR}/MikageSDLHostAudioSession.mm)
+    include_directories(${MIKAGE_SDL_HOST_DIR})
 endif()
 
 if(USE_FFMPEG)
@@ -227,7 +231,35 @@ if(NOT OHOS)
 
     if(USE_SDL3)
         find_package(SDL3 CONFIG REQUIRED)
-        target_link_libraries(${PROJECT_NAME} PRIVATE SDL3::SDL3)
+        if(KRKR_SDL3_FRAMEWORK)
+            # 头文件仍用 vcpkg 的 SDL3::Headers（SDL3_ttf 也依赖它），二进制改链共享 framework。
+            # 两者必须是同一个 SDL 版本，否则编译期头文件与运行期库不一致。
+            set(_krkr_sdl3_version_h "${KRKR_SDL3_FRAMEWORK}/Headers/SDL_version.h")
+            if(NOT EXISTS "${KRKR_SDL3_FRAMEWORK}/SDL3" OR NOT EXISTS "${_krkr_sdl3_version_h}")
+                message(FATAL_ERROR "KRKR_SDL3_FRAMEWORK is not an SDL3.framework: ${KRKR_SDL3_FRAMEWORK}")
+            endif()
+            file(STRINGS "${_krkr_sdl3_version_h}" _krkr_sdl3_version_lines
+                REGEX "^#define SDL_(MAJOR|MINOR|MICRO)_VERSION +[0-9]+")
+            set(_krkr_sdl3_framework_version "")
+            foreach(_part MAJOR MINOR MICRO)
+                foreach(_line IN LISTS _krkr_sdl3_version_lines)
+                    if(_line MATCHES "^#define SDL_${_part}_VERSION +([0-9]+)")
+                        list(APPEND _krkr_sdl3_framework_version "${CMAKE_MATCH_1}")
+                    endif()
+                endforeach()
+            endforeach()
+            list(JOIN _krkr_sdl3_framework_version "." _krkr_sdl3_framework_version)
+            if(NOT _krkr_sdl3_framework_version VERSION_EQUAL SDL3_VERSION)
+                message(FATAL_ERROR "Shared SDL3.framework is ${_krkr_sdl3_framework_version}, "
+                    "but vcpkg provides SDL3 ${SDL3_VERSION} headers. Build the framework from the same release.")
+            endif()
+            message(STATUS "Linking shared SDL3.framework ${_krkr_sdl3_framework_version}: ${KRKR_SDL3_FRAMEWORK}")
+            target_link_libraries(${PROJECT_NAME} PRIVATE SDL3::Headers "${KRKR_SDL3_FRAMEWORK}")
+            set_target_properties(${PROJECT_NAME} PROPERTIES
+                XCODE_ATTRIBUTE_LD_RUNPATH_SEARCH_PATHS "@executable_path/Frameworks @loader_path/..")
+        else()
+            target_link_libraries(${PROJECT_NAME} PRIVATE SDL3::SDL3)
+        endif()
 
         find_package(SDL3_ttf CONFIG REQUIRED)
         target_link_libraries(${PROJECT_NAME} PRIVATE SDL3_ttf::SDL3_ttf)
@@ -325,10 +357,4 @@ elseif(IOS)
     set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/Res/DroidSansFallback.ttf PROPERTIES
         MACOSX_PACKAGE_LOCATION Resources/Res)
     target_sources(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Res/DroidSansFallback.ttf)
-    set(EMOTE_INTEGRATION_NOTICES
-        ${KRKRSDL_PLUGINS_PATH}/emoteplayer/AETHER-NOTICE.md
-        ${KRKRSDL_PLUGINS_PATH}/emoteplayer/LICENSE-AETHER-GPL-3.0.txt)
-    set_source_files_properties(${EMOTE_INTEGRATION_NOTICES} PROPERTIES
-        MACOSX_PACKAGE_LOCATION Resources/Licenses)
-    target_sources(${PROJECT_NAME} PRIVATE ${EMOTE_INTEGRATION_NOTICES})
 endif()

@@ -30,16 +30,20 @@ void MikageKRKRSetLogCallback(MikageKRKRLogCallback callback);
 // movie that is already playing.
 void MikageKRKRSetSkippedMovies(const char *newlineSeparatedNames);
 
-// Select the animation implementation for the next Start. Does not change the
-// current session or its existing/new Emote players. Default is legacy (false).
-// The host's explicit choice overrides an environment or prior SDL hint.
-void MikageKRKRSetExperimentalEmote(bool enabled);
+// Whether the next Start stretches a game narrower than 16:9 (such as 4:3)
+// to 16:9. Games keep their own aspect ratio by default; either way the
+// picture is centered with black bars.
+void MikageKRKRSetStretchToScreen(bool enabled);
 
 typedef struct MikageKRKRStats {
     double framesPerSecond;
     double frameTimeMilliseconds;
     int32_t drawableWidth;
     int32_t drawableHeight;
+    // The game's own screen size, before letterboxing; 0 until the first
+    // frame. The host fits its overlays into the bars around it.
+    int32_t gameWidth;
+    int32_t gameHeight;
     char renderer[32];
     // frameTimeMilliseconds above remains the average frame interval.
     // Main-thread step wall time (includes script/decode and any GPU waits).
@@ -205,6 +209,9 @@ typedef struct MikageKRKRStats {
     uint64_t layerGPURejectPsTables;
     uint64_t layerGPURejectAffineAlias;
     uint64_t layerGPURejectPerspectiveAlias;
+    // GPU draw calls per presented frame over the last stats window; 0 on
+    // the software renderer.
+    double drawCallsPerFrame;
 } MikageKRKRStats;
 
 bool MikageKRKRStart(const char *gamePath,
@@ -219,6 +226,40 @@ MikageKRKRStepResult MikageKRKRStep(void);
 // Request KRKR's normal main-window close query; game may confirm or cancel.
 // No forced termination and no foreground suspension while it is pending.
 bool MikageKRKRRequestExit(void);
+// Sends the game an Escape key press, for games whose only way back is the
+// keyboard. Delivered on the next step.
+bool MikageKRKRSendBack(void);
+// Quick actions and the game menu's playback controls. Auto and skip use
+// the KAG3 system's own entry points (kag.enterAutoMode, kag.skipToStop),
+// so games with a system of their own may not offer them.
+typedef enum MikageKRKRCommand {
+    MikageKRKRCommandAuto = 1,
+    MikageKRKRCommandSkip = 2,
+    MikageKRKRCommandQuickSave = 3,
+    MikageKRKRCommandQuickLoad = 4,
+    MikageKRKRCommandBacklog = 5,
+    MikageKRKRCommandSave = 6,
+    MikageKRKRCommandLoad = 7,
+} MikageKRKRCommand;
+typedef enum MikageKRKRControl {
+    MikageKRKRControlAuto = 1 << 0,
+    MikageKRKRControlSkip = 1 << 1,
+    MikageKRKRControlCanAuto = 1 << 8,
+    MikageKRKRControlCanSkip = 1 << 9,
+    MikageKRKRControlCanQuickSave = 1 << 10,
+    MikageKRKRControlCanQuickLoad = 1 << 11,
+    MikageKRKRControlCanBacklog = 1 << 12,
+    MikageKRKRControlCanSave = 1 << 13,
+    MikageKRKRControlCanLoad = 1 << 14,
+} MikageKRKRControl;
+// Main thread, between steps.
+bool MikageKRKRRunCommand(int32_t command);
+uint32_t MikageKRKRGameControls(void);
+// Holds or releases Ctrl, which skips every line (read or not) while held.
+bool MikageKRKRSetControlSkip(bool held);
+// The host's trackpad cursor, as a mouse at x, y in window points.
+// phase: 0 move, 1 left down, 2 left up, 3 right down, 4 right up.
+bool MikageKRKRSendPointer(int32_t phase, float x, float y);
 // Forced host stop for interrupted startup/host lifecycle cleanup.
 void MikageKRKRRequestStop(void);
 bool MikageKRKRSetForeground(bool foreground);
