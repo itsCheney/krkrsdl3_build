@@ -1069,19 +1069,14 @@ const char *const kKAGTapWatch =
     "   return;"
     "  }"
     "  tap.key = '';"
-    "  var stack = [kag.fore.base], ox = [0], oy = [0];"
-    "  while (stack.count) {"
-    "   var l = stack.pop(), lx = ox.pop(), ly = oy.pop();"
-    "   for (var i = 0; i < l.children.count; i++) {"
-    "    var c = l.children[i];"
-    "    if (c === void || !c.visible || c instanceof 'MessageLayer') continue;"
-    "    var cx = lx + c.left, cy = ly + c.top;"
-    "    if (c instanceof 'ButtonLayer' && !(c instanceof 'LinkButtonLayer') &&"
-    "        x >= cx && y >= cy && x < cx + c.width && y < cy + c.height) {"
-    "     tap.key = c.left + ',' + c.top + ',' + c.width + ',' + c.height;"
-    "     tap.at = now;"
-    "    }"
-    "    stack.add(c); ox.add(cx); oy.add(cy);"
+    // The layer the engine itself hits, and up: reading .children here
+    // would make every layer keep an array of its children on each tap.
+    "  for (var c = kag.fore.base.getLayerAt(x, y); c && !c.isPrimary; c = c.parent) {"
+    "   if (c instanceof 'MessageLayer') break;"
+    "   if (c instanceof 'ButtonLayer' && !(c instanceof 'LinkButtonLayer')) {"
+    "    tap.key = c.left + ',' + c.top + ',' + c.width + ',' + c.height;"
+    "    tap.at = now;"
+    "    break;"
     "   }"
     "  }"
     " };"
@@ -1196,6 +1191,13 @@ const KAGLink *findLink(const std::vector<KAGLink> &links, int32_t command)
     return nullptr;
 }
 
+// The game owns its layers' lifetimes: the found buttons are let go as soon
+// as a query or press is done with them.
+void releaseKAGButtons()
+{
+    runKAGScript("(typeof global.mikageButtons != 'undefined') ? (global.mikageButtons = [], 1) : 0");
+}
+
 // Button layers, as links with layer -1 (index into global.mikageButtons).
 // Also logs the layer tree once per screen while no save or load button
 // is known, so the next unknown game says what its buttons are.
@@ -1254,6 +1256,7 @@ extern "C" uint32_t MikageKRKRGameControls(void)
                                      " || typeof kag.inStable == 'undefined' || kag.inStable) ? 1 : 0") == 1;
     std::vector<KAGLink> links = kagLinks();
     addKAGButtons(links);
+    releaseKAGButtons();
     for (const SystemActionCommand &entry : systemActionCommands()) {
         if (systemActionName(entry).empty() && !findLink(links, entry.command))
             continue;
@@ -1353,6 +1356,7 @@ bool runCommand(int32_t command)
         done = runKAGScript(kKAGQuickLoad) == 1;
     else if (command == MikageKRKRCommandBacklog && (controls & MikageKRKRControlCanBacklog))
         done = runKAGScript(kKAGBacklog) == 1;
+    releaseKAGButtons();
     char message[96];
     std::snprintf(message, sizeof(message), "runtime.command.%d.%s%s", command, done ? "done" : "unavailable", how);
     MikageKRKRLogMessage("bridge", done ? 3 : 4, message);
