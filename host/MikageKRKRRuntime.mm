@@ -688,9 +688,120 @@ void logSystemActions()
             &result);
         const std::string message = "systemActions " + std::string(ttstr(result).AsStdString());
         MikageKRKRLogMessage("bridge", 3, message.c_str());
+        // The plugins a game added to kag, where systems that draw their
+        // own system buttons usually live.
+        tTJSVariant plugins;
+        TVPExecuteExpression(ttstr(
+            "(typeof global.kag == 'undefined' || kag === void || typeof kag.plugins == 'undefined') ? ''"
+            " : (function { var k = []; for (var i = 0; i < kag.plugins.count; i++)"
+            " k.add(Scripts.getClassNames(kag.plugins[i])[0]); return k.join(','); } incontextof global)()"),
+            &plugins);
+        const std::string pluginMessage = "kagPlugins " + std::string(ttstr(plugins).AsStdString());
+        MikageKRKRLogMessage("bridge", 3, pluginMessage.c_str());
     } catch (...) {
         MikageKRKRLogMessage("bridge", 4, "systemActions unreadable");
     }
+}
+
+// Plain KAG3 games put their save and load buttons on a message layer as
+// [button] links. Each shown link, as "kind,layer,index,storage target exp";
+// kind is save, load, qsave or qload when its jump or expression names one.
+const char *const kKAGLinks =
+    "(function {"
+    " if (typeof global.kag == 'undefined' || kag === void || typeof kag.fore == 'undefined') return '';"
+    " var classify = function (t) {"
+    "  if (t == '') return '';"
+    "  if (/q(uick)?[_ ]?save/i.test(t)) return 'qsave';"
+    "  if (/q(uick)?[_ ]?load/i.test(t)) return 'qload';"
+    "  var s = /save/i.test(t), l = /load/i.test(t);"
+    "  if (s && !l) return 'save';"
+    "  if (l && !s) return 'load';"
+    "  return '';"
+    " };"
+    " var out = [], layers = kag.fore.messages;"
+    " for (var m = 0; m < layers.count; m++) {"
+    "  var ml = layers[m];"
+    "  if (ml === void || !ml.visible || typeof ml.links == 'undefined' || typeof ml.numLinks == 'undefined') continue;"
+    "  for (var i = 0; i < ml.numLinks; i++) {"
+    "   var ln = ml.links[i];"
+    "   if (ln === void) continue;"
+    "   var t = (string)ln.target, e = (string)ln.exp, st = (string)ln.storage;"
+    "   var k = classify(t); if (k == '') k = classify(e); if (k == '') k = classify(st);"
+    "   out.add(k + ',' + m + ',' + i + ',' + st + ' ' + t + ' ' + e);"
+    "  }"
+    " }"
+    " return out.join('|');"
+    "} incontextof global)()";
+
+std::string runKAGString(const char *script)
+{
+    if (!MikageSDLHostIsRunning())
+        return {};
+    try {
+        tTJSVariant result;
+        TVPExecuteExpression(ttstr(script), &result);
+        return result.Type() == tvtVoid ? std::string() : std::string(ttstr(result).AsStdString());
+    } catch (...) {
+        return {};
+    }
+}
+
+struct KAGLink {
+    std::string kind;
+    int layer = 0;
+    int index = 0;
+};
+
+const char *linkKind(int32_t command)
+{
+    switch (command) {
+    case MikageKRKRCommandSave: return "save";
+    case MikageKRKRCommandLoad: return "load";
+    case MikageKRKRCommandQuickSave: return "qsave";
+    case MikageKRKRCommandQuickLoad: return "qload";
+    default: return nullptr;
+    }
+}
+
+// The shown links; logs them whenever they change, so a game whose
+// buttons aren't recognized shows what it has.
+std::vector<KAGLink> kagLinks()
+{
+    static std::string logged;
+    const std::string all = runKAGString(kKAGLinks);
+    if (all != logged) {
+        logged = all;
+        const std::string message = "kagLinks " + all.substr(0, 900);
+        MikageKRKRLogMessage("bridge", 3, message.c_str());
+    }
+    std::vector<KAGLink> links;
+    size_t start = 0;
+    while (start < all.size()) {
+        size_t end = all.find('|', start);
+        if (end == std::string::npos)
+            end = all.size();
+        const std::string entry = all.substr(start, end - start);
+        start = end + 1;
+        const size_t a = entry.find(',');
+        const size_t b = a == std::string::npos ? a : entry.find(',', a + 1);
+        const size_t c = b == std::string::npos ? b : entry.find(',', b + 1);
+        if (c == std::string::npos || a == 0)
+            continue;
+        links.push_back({entry.substr(0, a), std::atoi(entry.substr(a + 1, b - a - 1).c_str()),
+                         std::atoi(entry.substr(b + 1, c - b - 1).c_str())});
+    }
+    return links;
+}
+
+const KAGLink *findLink(const std::vector<KAGLink> &links, int32_t command)
+{
+    const char *kind = linkKind(command);
+    if (!kind)
+        return nullptr;
+    for (const KAGLink &link : links)
+        if (link.kind == kind)
+            return &link;
+    return nullptr;
 }
 
 } // namespace
@@ -704,8 +815,9 @@ extern "C" uint32_t MikageKRKRGameControls(void)
     // A game's own entries win over the bookmark quick save and showHistory.
     const bool stable = runKAGScript("(typeof global.kag == 'undefined' || kag === void"
                                      " || typeof kag.inStable == 'undefined' || kag.inStable) ? 1 : 0") == 1;
+    const std::vector<KAGLink> links = kagLinks();
     for (const SystemActionCommand &entry : systemActionCommands()) {
-        if (systemActionName(entry).empty())
+        if (systemActionName(entry).empty() && !findLink(links, entry.command))
             continue;
         if (stable)
             controls |= entry.control;
@@ -722,10 +834,17 @@ extern "C" bool MikageKRKRRunCommand(int32_t command)
     const char *how = "";
     const SystemActionCommand *action = systemActionCommand(command);
     const std::string name = action ? systemActionName(*action) : std::string();
+    const std::vector<KAGLink> links = kagLinks();
     if (!name.empty() && (controls & action->control)) {
         const std::string script = "SystemAction." + name + "(), 1";
         done = runKAGScript(script.c_str()) == 1;
         how = ".systemAction";
+    } else if (const KAGLink *link = (controls & (action ? action->control : 0)) ? findLink(links, command) : nullptr) {
+        // As a click on the game's own button.
+        const std::string script = "kag.fore.messages[" + std::to_string(link->layer) + "].processLink(" +
+                                   std::to_string(link->index) + "), 1";
+        done = runKAGScript(script.c_str()) == 1;
+        how = ".link";
     } else if (command == MikageKRKRCommandAuto && (controls & MikageKRKRControlCanAuto))
         done = runKAGScript(kKAGToggleAuto) == 1;
     else if (command == MikageKRKRCommandSkip && (controls & MikageKRKRControlCanSkip))
