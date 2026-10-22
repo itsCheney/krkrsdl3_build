@@ -9,6 +9,7 @@
 #include <SDL3/SDL_main.h>
 
 #include <string>
+#include <functional>
 #include <exception>
 #include <cstring>
 #include <sys/mman.h>
@@ -125,6 +126,7 @@ extern "C" void MikageKRKRSetStretchToScreen(bool enabled)
 
 #include "TVPApplication.h"
 #include "TVPWindow.h"
+#include "TVPEvent.h"
 #include "PlatformThread.h"
 #include "tjsError.h"
 #include "tjsDebug.h"
@@ -249,6 +251,9 @@ namespace {
 // Nonzero while MikageKRKRStep is on the stack. A modal SDL dialog pumps the
 // run loop mid-script, so host callbacks can arrive inside a step.
 int stepDepth = 0;
+// The KAG tap watch (kKAGTapWatch) of the running game.
+bool tapWatchInstalled = false;
+int tapWatchWait = 0;
 std::string activeRenderer;
 Uint64 statsWindowStarted = 0;
 Uint64 previousFrameAt = 0;
@@ -501,6 +506,8 @@ extern "C" bool MikageKRKRStart(const char *gamePath,
             krkrsdl3::TVPResetRuntimeProfileStats();
 
             traceScope.BeginSession();
+            tapWatchInstalled = false;
+            tapWatchWait = 0;
             TVPHostOwnsProcess = true;
             const MikageSDLHostConfiguration configuration = {
                 static_cast<int>(argv.size()),
@@ -534,6 +541,14 @@ extern "C" bool MikageKRKRStart(const char *gamePath,
 
 namespace {
 
+void watchButtonTaps();
+
+// Stays raised while a modal window waits: its script is mid-call.
+struct StepDepth {
+    StepDepth() { ++stepDepth; }
+    ~StepDepth() { --stepDepth; }
+};
+
 // Runs on the step stack. The diagnostics scopes live here, not around the
 // switch: VM call scopes link to the step's scope, and a modal window can
 // suspend them across frames.
@@ -545,11 +560,8 @@ MikageKRKRStepResult runStep()
         return diagnosticScriptOnVMThread() && TJS::TJSGetStackTraceUTF8(out, static_cast<tjs_uint>(bytes), frames);
     };
     krkrsdl3::cpu_frame::StepScope cpuStep;
-    // Stays raised while a modal window waits: its script is mid-call.
-    struct StepDepth {
-        StepDepth() { ++stepDepth; }
-        ~StepDepth() { --stepDepth; }
-    } depth;
+    StepDepth depth;
+    watchButtonTaps();
     try {
         return static_cast<MikageKRKRStepResult>(MikageSDLHostStep());
     } catch (const eTJSSilent &) {
@@ -571,6 +583,24 @@ MikageKRKRStepResult runStep()
 // True while a modal window's loop has handed the frame back to the host:
 // the script that opened it is still mid-call on the step stack.
 bool modalSuspended = false;
+
+// Host calls that run game script (a menu command, the quit request) run
+// on the step stack as well: that script may open a modal window, and a
+// modal loop on the host stack spins UIKit's run loop from inside the
+// SwiftUI action that called it.
+std::vector<std::function<bool()>> stepJobs;
+bool stepJobResult = false;
+
+bool runJob(const std::function<bool()> &job)
+{
+    DiagnosticScriptTraceScope traceScope;
+    StepDepth depth;
+    try {
+        return job();
+    } catch (...) {
+        return false;
+    }
+}
 
 #if defined(__aarch64__) && defined(__APPLE__)
 // Steps run on their own stack so a modal window (askYesNo, the quit
@@ -635,7 +665,14 @@ void toHost()
 [[noreturn]] void stepMain(void *)
 {
     for (;;) {
-        stepResult = runStep();
+        if (!stepJobs.empty()) {
+            std::function<bool()> job = std::move(stepJobs.front());
+            stepJobs.erase(stepJobs.begin());
+            stepJobResult = runJob(job);
+            stepResult = MIKAGE_KRKR_STEP_RUNNING;
+        } else {
+            stepResult = runStep();
+        }
         toHost();
     }
 }
@@ -689,10 +726,36 @@ MikageKRKRStepResult resumeStep()
     onStepStack = false;
     return stepResult;
 }
+
+// Runs job on the step stack now, or after the game's open dialog closes.
+// A job that opens a dialog itself finishes on a later frame; it counts
+// as done.
+bool runOnStepStack(std::function<bool()> job)
+{
+    if (onStepStack)
+        return runJob(job);
+    stepJobs.push_back(std::move(job));
+    if (modalSuspended)
+        return true;
+    stepJobResult = true;
+    resumeStep();
+    if (!stepStack) {
+        // No step stack could be made; resumeStep ran a plain step.
+        std::function<bool()> queued = std::move(stepJobs.back());
+        stepJobs.pop_back();
+        return runJob(queued);
+    }
+    return stepJobResult;
+}
 #else
 MikageKRKRStepResult resumeStep()
 {
     return runStep();
+}
+
+bool runOnStepStack(std::function<bool()> job)
+{
+    return runJob(job);
 }
 #endif
 }
@@ -706,27 +769,31 @@ extern "C" MikageKRKRStepResult MikageKRKRStep(void)
 
 extern "C" bool MikageKRKRRequestExit(void)
 {
-    DiagnosticScriptTraceScope traceScope;
     if (!MikageSDLHostIsRunning() || !MikageSDLHostIsForeground() || !TVPMainWindow)
         return false;
-    try {
-        MikageKRKRLogMessage("bridge", 3, "runtime.userClose.requested");
-        TVPMainWindow->RequestUserClose();
-        return true;
-    } catch (const eTJSSilent &) {
-        // onCloseQuery called System.exit; the next step finishes the session.
-        if (TVPTerminated)
+    MikageKRKRLogMessage("bridge", 3, "runtime.userClose.requested");
+    // The game's close query usually asks with a dialog.
+    return runOnStepStack([] {
+        if (!TVPMainWindow)
+            return false;
+        try {
+            TVPMainWindow->RequestUserClose();
             return true;
-        MikageSDLHostSetLastError("Silent KRKR exception requesting close-query.");
-    } catch (const eTJS &error) {
-        MikageSDLHostSetLastError(error.GetMessage().c_str());
-    } catch (const std::exception &error) {
-        MikageSDLHostSetLastError(error.what() ? error.what() : "KRKR close-query failed.");
-    } catch (...) {
-        MikageSDLHostSetLastError("Unknown exception requesting KRKR close-query.");
-    }
-    MikageKRKRLogMessage("bridge", 5, MikageSDLHostLastError());
-    return false;
+        } catch (const eTJSSilent &) {
+            // onCloseQuery called System.exit; the next step finishes the session.
+            if (TVPTerminated)
+                return true;
+            MikageSDLHostSetLastError("Silent KRKR exception requesting close-query.");
+        } catch (const eTJS &error) {
+            MikageSDLHostSetLastError(error.GetMessage().c_str());
+        } catch (const std::exception &error) {
+            MikageSDLHostSetLastError(error.what() ? error.what() : "KRKR close-query failed.");
+        } catch (...) {
+            MikageSDLHostSetLastError("Unknown exception requesting KRKR close-query.");
+        }
+        MikageKRKRLogMessage("bridge", 5, MikageSDLHostLastError());
+        return false;
+    });
 }
 
 extern "C" bool MikageKRKRSendBack(void)
@@ -908,18 +975,18 @@ const char *const kKAGButtons =
     "  return '';"
     " };"
     " var text = function (o, p) { try { var v = o[p]; return v === void ? '' : (string)v; } catch (e) { return ''; } };"
-    // The button's own text and number members (a plugin's file names,
+    // The button's own non-empty text members (a plugin's file names,
     // labels, actions), for buttons that set no name, hint or exp.
     " var members = function (o) {"
     "  var d = %[], a = [], s = '';"
     "  try { (Dictionary.assign incontextof d)(o, false); a.assign(d); } catch (e) { return ''; }"
-    "  for (var j = 0; j + 1 < a.count && s.length < 200; j += 2) {"
-    "   var t = typeof a[j + 1];"
-    "   if (t == 'String' || t == 'Integer' || t == 'Real') s += a[j] + '=' + ((string)a[j + 1]).substring(0, 32) + ';';"
+    "  for (var j = 0; j + 1 < a.count && s.length < 400; j += 2) {"
+    "   if (typeof a[j + 1] == 'String' && a[j + 1] != '') s += a[j] + '=' + a[j + 1].substring(0, 48) + ';';"
     "  }"
     "  return s;"
     " };"
     " global.mikageButtons = [];"
+    " var learned = typeof kag.scflags != 'undefined' && kag.scflags !== void ? kag.scflags.mikageButtonKinds : void;"
     " var out = [], stack = [kag.fore.base];"
     " while (stack.count && global.mikageButtons.count < 64) {"
     "  var l = stack.pop();"
@@ -933,6 +1000,7 @@ const char *const kKAGButtons =
     "    var k = classify(text(c, 'name')); if (k == '') k = classify(text(c, 'hint'));"
     "    if (k == '') k = classify(text(c, 'exp')); if (k == '') k = classify(text(c, 'target'));"
     "    if (k == '') k = classify(text(c, 'storage')); if (k == '') k = classify(own);"
+    "    if (k == '' && learned !== void) { var lk = learned[c.left + ',' + c.top + ',' + c.width + ',' + c.height]; if (lk !== void) k = lk; }"
     "    out.add(k + ',' + global.mikageButtons.count + ',' + d.replace(/\\|/g, '/'));"
     "    global.mikageButtons.add(c);"
     "   }"
@@ -940,6 +1008,69 @@ const char *const kKAGButtons =
     "  }"
     " }"
     " return out.join('|');"
+    "} incontextof global)()";
+
+// Buttons that say nothing about themselves are learned from the player's
+// own taps: a tap on a button layer followed by a save or load screen
+// (its links, as kKAGLinks reads them) marks that button, by its place
+// and size, in the game's system variables (sf.mikageButtonKinds).
+const char *const kKAGTapWatch =
+    "(function {"
+    " if (typeof global.kag == 'undefined' || kag === void || typeof kag.fore == 'undefined') return 0;"
+    " if (typeof global.mikageTap != 'undefined') return 1;"
+    " var down = kag.onMouseDown;"
+    " if (down === void) return 0;"
+    " global.mikageTap = %[key: '', at: 0];"
+    " global.mikageScreenKind = function {"
+    "  var layers = kag.fore.messages;"
+    "  for (var m = 0; m < layers.count; m++) {"
+    "   var ml = layers[m];"
+    "   if (ml === void || !ml.visible || typeof ml.links == 'undefined' || typeof ml.numLinks == 'undefined') continue;"
+    "   for (var i = 0; i < ml.numLinks; i++) {"
+    "    var ln = ml.links[i];"
+    "    if (ln === void) continue;"
+    "    var t = (string)ln.target + ' ' + (string)ln.exp + ' ' + (string)ln.storage;"
+    "    if (/q(uick)?[_ ]?(save|load)/i.test(t)) continue;"
+    "    var s = /save/i.test(t), l = /load/i.test(t);"
+    "    if (s && !l) return 'save';"
+    "    if (l && !s) return 'load';"
+    "   }"
+    "  }"
+    "  return '';"
+    " };"
+    " global.mikageLearnTap = function (x, y) {"
+    "  var tap = mikageTap, shown = mikageScreenKind(), now = System.getTickCount();"
+    "  if (shown != '') {"
+    "   if (tap.key != '' && now - tap.at < 15000) {"
+    "    if (kag.scflags.mikageButtonKinds === void) kag.scflags.mikageButtonKinds = %[];"
+    "    if (kag.scflags.mikageButtonKinds[tap.key] != shown) Debug.message('mikage.buttonLearned ' + tap.key + ' ' + shown);"
+    "    kag.scflags.mikageButtonKinds[tap.key] = shown;"
+    "   }"
+    "   tap.key = '';"
+    "   return;"
+    "  }"
+    "  tap.key = '';"
+    "  var stack = [kag.fore.base], ox = [0], oy = [0];"
+    "  while (stack.count) {"
+    "   var l = stack.pop(), lx = ox.pop(), ly = oy.pop();"
+    "   for (var i = 0; i < l.children.count; i++) {"
+    "    var c = l.children[i];"
+    "    if (c === void || !c.visible || c instanceof 'MessageLayer') continue;"
+    "    var cx = lx + c.left, cy = ly + c.top;"
+    "    if (c instanceof 'ButtonLayer' && !(c instanceof 'LinkButtonLayer') &&"
+    "        x >= cx && y >= cy && x < cx + c.width && y < cy + c.height) {"
+    "     tap.key = c.left + ',' + c.top + ',' + c.width + ',' + c.height;"
+    "     tap.at = now;"
+    "    }"
+    "    stack.add(c); ox.add(cx); oy.add(cy);"
+    "   }"
+    "  }"
+    " };"
+    " kag.onMouseDown = function (x, y, button, shift) {"
+    "  try { if (button == mbLeft) mikageLearnTap(x, y); } catch (e) {}"
+    "  return down(...);"
+    " } incontextof kag;"
+    " return 1;"
     "} incontextof global)()";
 
 // What the screen is made of, for games whose buttons none of the above
@@ -974,6 +1105,16 @@ std::string runKAGString(const char *script)
     } catch (...) {
         return {};
     }
+}
+
+// Puts the tap watch on the game's window once KAG is up (checked about
+// once a second, until it is).
+void watchButtonTaps()
+{
+    if (tapWatchInstalled || ++tapWatchWait < 60)
+        return;
+    tapWatchWait = 0;
+    tapWatchInstalled = runKAGScript(kKAGTapWatch) == 1;
 }
 
 struct KAGLink {
@@ -1103,10 +1244,31 @@ extern "C" uint32_t MikageKRKRGameControls(void)
     return (uint32_t)controls;
 }
 
-extern "C" bool MikageKRKRRunCommand(int32_t command)
+namespace {
+
+// The press a finger on the game's button would make: down, click, up at
+// the button's centre, through the window's input queue.
+bool pressButton(int index)
 {
-    if (modalSuspended)
+    const std::string script =
+        "(function { var c = global.mikageButtons[" + std::to_string(index) + "];"
+        " var x = c.width \\ 2, y = c.height \\ 2;"
+        " for (var l = c; l.parent !== void; l = l.parent) { x += l.left; y += l.top; }"
+        " return x < 0 || y < 0 || x > 32767 || y > 32767 ? -1 : x * 65536 + y;"
+        "} incontextof global)()";
+    const tjs_int at = runKAGScript(script.c_str());
+    TVPWindow *window = TVPGetActiveWindow();
+    if (at < 0 || !window)
         return false;
+    const tjs_int x = at >> 16, y = at & 0xffff;
+    TVPPostInputEvent(new tTVPOnMouseDownInputEvent(window, x, y, mbLeft, ssLeft));
+    TVPPostInputEvent(new tTVPOnClickInputEvent(window, x, y));
+    TVPPostInputEvent(new tTVPOnMouseUpInputEvent(window, x, y, mbLeft, 0));
+    return true;
+}
+
+bool runCommand(int32_t command)
+{
     const uint32_t controls = MikageKRKRGameControls();
     bool done = false;
     const char *how = "";
@@ -1120,12 +1282,15 @@ extern "C" bool MikageKRKRRunCommand(int32_t command)
         how = ".systemAction";
     } else if (const KAGLink *link = (controls & (action ? action->control : 0)) ? findLink(links, command) : nullptr) {
         // As a click on the game's own button.
-        const std::string script = link->layer < 0
-            ? "global.mikageButtons[" + std::to_string(link->index) + "].onClick(0, 0), 1"
-            : "kag.fore.messages[" + std::to_string(link->layer) + "].processLink(" +
-              std::to_string(link->index) + "), 1";
-        done = runKAGScript(script.c_str()) == 1;
-        how = ".link";
+        if (link->layer < 0) {
+            done = pressButton(link->index);
+            how = ".button";
+        } else {
+            const std::string script = "kag.fore.messages[" + std::to_string(link->layer) + "].processLink(" +
+                                       std::to_string(link->index) + "), 1";
+            done = runKAGScript(script.c_str()) == 1;
+            how = ".link";
+        }
     } else if (command == MikageKRKRCommandAuto && (controls & MikageKRKRControlCanAuto))
         done = runKAGScript(kKAGToggleAuto) == 1;
     else if (command == MikageKRKRCommandSkip && (controls & MikageKRKRControlCanSkip))
@@ -1140,6 +1305,16 @@ extern "C" bool MikageKRKRRunCommand(int32_t command)
     std::snprintf(message, sizeof(message), "runtime.command.%d.%s%s", command, done ? "done" : "unavailable", how);
     MikageKRKRLogMessage("bridge", done ? 3 : 4, message);
     return done;
+}
+
+} // namespace
+
+extern "C" bool MikageKRKRRunCommand(int32_t command)
+{
+    // The game's own dialog is up; its script is mid-call.
+    if (modalSuspended)
+        return false;
+    return runOnStepStack([command] { return runCommand(command); });
 }
 
 extern "C" bool MikageKRKRSetControlSkip(bool held)
