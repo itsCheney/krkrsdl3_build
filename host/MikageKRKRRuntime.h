@@ -132,6 +132,11 @@ typedef struct MikageKRKRStats {
     uint64_t emoteProgressSampleTimeNS;
     uint64_t emoteProgressPhysicsTimeNS;
     uint64_t emoteProgressMaxTimeNS;
+    // Live E-mote icon textures and bytes, and icons that reused a texture
+    // another player of the same model had already uploaded.
+    uint64_t emoteIconTextures;
+    uint64_t emoteIconTextureBytes;
+    uint64_t emoteIconTextureShares;
 
     // M6.2 Emote prepare breakdown.
     uint64_t emotePrepareTransformTimeNS;
