@@ -1649,6 +1649,13 @@ extern "C" bool MikageKRKRGetStats(MikageKRKRStats *stats)
     stats->emoteDrawTimeNS = profile.emoteDrawTimeNS;
     stats->emoteCaptureProfileCalls = profile.emoteCaptureProfileCalls;
     stats->emoteCaptureTimeNS = profile.emoteCaptureTimeNS;
+    stats->emoteProgressControlTimeNS = profile.emoteProgressControlTimeNS;
+    stats->emoteProgressSampleTimeNS = profile.emoteProgressSampleTimeNS;
+    stats->emoteProgressPhysicsTimeNS = profile.emoteProgressPhysicsTimeNS;
+    stats->emoteProgressMaxTimeNS = profile.emoteProgressMaxTimeNS;
+    stats->emoteIconTextures = profile.emoteIconTextures;
+    stats->emoteIconTextureBytes = profile.emoteIconTextureBytes;
+    stats->emoteIconTextureShares = profile.emoteIconTextureShares;
     stats->emotePrepareTransformTimeNS = profile.emotePrepareTransformTimeNS;
     stats->emotePrepareMotionProgressTimeNS = profile.emotePrepareMotionProgressTimeNS;
     stats->emotePrepareSnapshotTimeNS = profile.emotePrepareSnapshotTimeNS;
