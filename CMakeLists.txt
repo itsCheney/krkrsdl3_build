@@ -81,9 +81,13 @@ endif()
 
 # SDL版本选择: ON=SDL3, OFF=SDL2
 option(USE_SDL3 "Use SDL3 (OFF for SDL2)" ON)
-if((ANDROID OR IOS) AND NOT USE_SDL3)
-    # android/iOS由于存在平台入口与触屏层，所以不支持SDL2
-    message(FATAL_ERROR "安卓/iOS 不支持 SDL2 作为硬件后端")
+# 离屏自动化测试宿主（AutoTest / -offscreen / -silent / -frames / -dump / -at_harness）
+# 关掉后所有入口在头文件里内联成空实现，主循环与送显路径不留任何调用开销
+# Mikage: the iOS app never runs the test host, so leave it out there.
+if(IOS)
+    option(ENABLE_AUTOTEST "Build the offscreen AutoTest host (tests/autotest.md)" OFF)
+else()
+    option(ENABLE_AUTOTEST "Build the offscreen AutoTest host (tests/autotest.md)" ON)
 endif()
 # 视频解码后端: ON=FFmpeg, OFF=系统API(MediaFoundation/MediaCodec)
 # 感觉没必要禁用，OFF的实现基本没用༼ ༎ຶ ෴ ༎ຶ༽
@@ -111,6 +115,14 @@ endif()
 set(MIKAGE_SDL_HOST_DIR "" CACHE PATH "iOS host: Mikage's shared SDL host sources (Engine/MikageSDLHost)")
 if(IOS AND KRKR_HOST_LIBRARY AND NOT EXISTS "${MIKAGE_SDL_HOST_DIR}/MikageSDLHost.h")
     message(FATAL_ERROR "KRKR_HOST_LIBRARY requires MIKAGE_SDL_HOST_DIR to point at Mikage's Engine/MikageSDLHost")
+endif()
+
+if((ANDROID OR IOS) AND NOT USE_SDL3)
+    # android/iOS由于存在平台入口与触屏层，所以不支持SDL2
+    message(FATAL_ERROR "安卓/iOS 不支持 SDL2 作为硬件后端")
+endif()
+if(ENABLE_AUTOTEST)
+    add_definitions(-D_KRKRSDL3_AUTOTEST=1)
 endif()
 
 # 建立项目
