@@ -116,6 +116,10 @@ set(MIKAGE_SDL_HOST_DIR "" CACHE PATH "iOS host: Mikage's shared SDL host source
 if(IOS AND KRKR_HOST_LIBRARY AND NOT EXISTS "${MIKAGE_SDL_HOST_DIR}/MikageSDLHost.h")
     message(FATAL_ERROR "KRKR_HOST_LIBRARY requires MIKAGE_SDL_HOST_DIR to point at Mikage's Engine/MikageSDLHost")
 endif()
+# ASan 构建（clang/llvm-mingw 自带运行时）
+option(TJS2_ASAN "Build with AddressSanitizer" OFF)
+# libFuzzer 目标（源解析与字节码加载）
+option(TJS2_FUZZERS "Build libFuzzer targets for tjs2" OFF)
 
 if((ANDROID OR IOS) AND NOT USE_SDL3)
     # android/iOS由于存在平台入口与触屏层，所以不支持SDL2
@@ -144,6 +148,11 @@ if(IOS OR MACOS)
     set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
 endif()
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+if(TJS2_ASAN)
+    add_compile_options(-fsanitize=address -fno-omit-frame-pointer -g)
+    add_link_options(-fsanitize=address)
+endif()
 
 if(ANDROID)
     add_definitions(-D_KRKRSDL3_ANDROID=1)
@@ -178,4 +187,8 @@ if(ONLYCONSOLE)
     include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/cmake_console.txt)
 else()
     include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/cmake_main.txt)
+endif()
+
+if(TJS2_FUZZERS)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/cmake_fuzz.txt)
 endif()
